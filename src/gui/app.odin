@@ -608,7 +608,10 @@ open_entry :: proc(vi: int) {
 }
 
 open_terminal :: proc() {
-	terms := [?]string{os.get_env("TERMINAL", context.temp_allocator), "ame-terminal", "ghostty", "foot", "kgx", "gnome-terminal", "xterm"}
+	terms := [?]string {
+		os.get_env("TERMINAL", context.temp_allocator), "ame-terminal", "ghostty", "foot", "kgx", "gnome-terminal",
+		"konsole", "alacritty", "kitty", "wezterm", "xfce4-terminal", "xterm", // the usual ones on Arch and FreeBSD
+	}
 	for t in terms {
 		if t == "" do continue
 		if spawn({t}, app.cwd) != 0 do return

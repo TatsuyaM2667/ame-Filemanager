@@ -57,9 +57,12 @@ so it idles at **0% CPU and ~19 MB of RAM**.
 - **Handy extras from other file managers**: new empty file, select by pattern (Ctrl+S, e.g.
   `*.jpg *.png`), paste a copied image or text as a new file, Tab completion in the path bar,
   item counts for folders in list view, free space of the current drive in the sidebar, mouse
-  back / forward buttons, and your tabs reopen at the next start.
-- **Live project badges**: adding, downloading or editing files inside a project updates its
-  language / framework badge within half a second.
+  back / forward buttons.
+- **Open with**: right-click a folder or file → 開く… → アプリから開く… lists every installed app
+  that declares the type (code editors, other file managers…) with its own icon.
+- **Language / framework badge on every folder**: whatever it holds the most code of right now
+  (or the framework in its manifest), worked out on a background thread and updated live when
+  files are added, downloaded or edited.
 - **Bookmarks** (shared with GNOME), **USB drives** (mount via udisks2 / eject), **Git status** dots, **properties** (Ctrl+I), **batch rename** (F2 on
   several items: `*` = old name, `##` = number).
 - **Radial right-click menus** with the same swirl-in animation as the convert donut; tag colors
