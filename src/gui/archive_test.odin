@@ -386,3 +386,26 @@ test_open_with :: proc(t: ^testing.T) {
 	testing.expect_value(t, len(open_with), 1)
 	if len(open_with) == 1 do testing.expect_value(t, open_with[0].name, "Editor")
 }
+
+@(test)
+test_git_repo_config_safe :: proc(t: ^testing.T) {
+	testing.expect(t, repo_lines_safe(""))
+	testing.expect(t, repo_lines_safe("global\tfilter.lfs.clean git-lfs clean -- %f\n")) // the user's own config
+	testing.expect(t, !repo_lines_safe("local\tcore.fsmonitor touch /tmp/pwned\n"))
+	testing.expect(t, !repo_lines_safe("global\tfilter.lfs.clean x\nlocal\tfilter.evil.clean sh -c id\n"))
+}
+
+@(test)
+test_hardening :: proc(t: ^testing.T) {
+	// field codes inside quotes are not expanded (no file names inside sh -c strings)
+	argv := exec_argv(`sh -c "echo %f"`, "/tmp/$(touch pwned)")
+	testing.expect_value(t, len(argv), 3)
+	testing.expect_value(t, argv[2], "echo ")
+	argv = exec_argv("ed %F", "/tmp/a")
+	testing.expect_value(t, argv[1], "/tmp/a")
+	// broken SVGs give a blank icon instead of crashing
+	img := svg_rasterize(`<svg viewBox="0 0 0 0"><path d="M0 0h10v10z"/></svg>`, 16, context.temp_allocator)
+	testing.expect_value(t, img[0], u32(0))
+	img = svg_rasterize(`<svg viewBox="0 0 10 10"><path d="M0 0L1e30 1e30L0 5z M nan"/><rect width="1e39" height="5"/></svg>`, 16, context.temp_allocator)
+	_ = img
+}

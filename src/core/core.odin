@@ -1,12 +1,15 @@
 package gfcore
 
+import "base:runtime"
 import "core:c/libc"
 import "core:fmt"
+import "core:io"
 import "core:mem"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
 import "core:sync"
+import "core:time"
 
 // ============================================================================
 // Core Types
@@ -45,22 +48,52 @@ OperationStatus :: enum i32 {
 // Internal Helpers
 // ============================================================================
 
-file_info_from_os :: proc(path: string, info: os.File_Info) -> FileInfo {
-	fi: FileInfo
-	mem.zero_slice(fi.name[:])
-	mem.zero_slice(fi.path[:])
+// errno values shared by Linux and FreeBSD
+@(private) EPERM :: 1
+@(private) ENOENT :: 2
+@(private) EACCES :: 13
+@(private) EEXIST :: 17
+@(private) EXDEV :: 18
 
+// Maps an os error to a status, keeping the reason (not "everything is ErrorIO / ErrorExists").
+status_of :: proc(err: os.Error) -> OperationStatus {
+	if err == nil do return .Success
+	#partial switch e in err {
+	case os.General_Error:
+		#partial switch e {
+		case .Exist:        return .ErrorExists
+		case .Not_Exist:    return .ErrorNotFound
+		case .Invalid_Path: return .ErrorInvalidPath
+		}
+	case io.Error:
+		if e == .Permission_Denied do return .ErrorPermission
+	case os.Platform_Error:
+		switch i32(e) {
+		case EPERM, EACCES: return .ErrorPermission
+		case EEXIST:        return .ErrorExists
+		case ENOENT:        return .ErrorNotFound
+		}
+	}
+	return .ErrorIO
+}
+
+// rename(2) failed only because src and dst are on different filesystems.
+is_cross_device :: proc(err: os.Error) -> bool {
+	e, ok := err.(os.Platform_Error)
+	return ok && i32(e) == EXDEV
+}
+
+// ok=false when the path does not fit the fixed C-ABI buffer (names always fit: NAME_MAX is 255).
+file_info_from_os :: proc(path: string, info: os.File_Info) -> (fi: FileInfo, ok: bool) {
 	name := filepath.base(path)
-	name_len := min(len(name), len(fi.name))
-	mem.copy(&fi.name[0], raw_data(name), name_len)
-	fi.name_len = u32(name_len)
-
-	path_len := min(len(path), len(fi.path))
-	mem.copy(&fi.path[0], raw_data(path), path_len)
-	fi.path_len = u32(path_len)
+	if len(name) > len(fi.name) || len(path) > len(fi.path) do return
+	mem.copy(&fi.name[0], raw_data(name), len(name))
+	fi.name_len = u32(len(name))
+	mem.copy(&fi.path[0], raw_data(path), len(path))
+	fi.path_len = u32(len(path))
 
 	fi.size = info.size
-	fi.modified = info.modification_time._nsec
+	fi.modified = time.time_to_unix_nano(info.modification_time)
 
 	// Check if directory using type field
 	#partial switch info.type {
@@ -75,39 +108,38 @@ file_info_from_os :: proc(path: string, info: os.File_Info) -> FileInfo {
 	}
 
 	fi.is_hidden = len(name) > 0 && name[0] == '.'
-
-	return fi
+	return fi, true
 }
 
 // ============================================================================
 // Core File Operations
 // ============================================================================
 
+// The returned slice is temp-allocated: valid until the caller frees the temp allocator
+// (once per frame in the GUI, at exit in the CLI). Entries whose path is longer than
+// FileInfo.path (1024 bytes) are left out rather than truncated into a wrong path.
+// (`context.allocator = ...` only changes this procedure's copy of the context: callers are unaffected.)
 list_directory :: proc(path: string) -> ([]FileInfo, OperationStatus) {
 	context.allocator = context.temp_allocator
 
 	handle, err := os.open(path, os.O_RDONLY)
 	if err != nil {
-		return nil, .ErrorNotFound
+		return nil, status_of(err)
 	}
 	defer os.close(handle)
 
 	file_infos, read_err := os.read_dir(handle, -1, context.allocator)
 	if read_err != nil {
-		return nil, .ErrorIO
+		return nil, status_of(read_err)
 	}
-	defer os.file_info_slice_delete(file_infos, context.allocator)
 
-	results := make([]FileInfo, len(file_infos))
-	for info, i in file_infos {
+	results := make([dynamic]FileInfo, 0, len(file_infos))
+	for info in file_infos {
 		full_path, join_err := filepath.join({path, info.name}, context.temp_allocator)
-		if join_err != nil {
-			continue
-		}
-		results[i] = file_info_from_os(full_path, info)
+		if join_err != nil do continue
+		if fi, ok := file_info_from_os(full_path, info); ok do append(&results, fi)
 	}
-
-	return results, .Success
+	return results[:], .Success
 }
 
 copy_file :: proc(src: string, dst: string) -> OperationStatus {
@@ -119,17 +151,17 @@ copy_file :: proc(src: string, dst: string) -> OperationStatus {
 	if stat_err != nil {
 		return .ErrorNotFound
 	}
+	// note: the os package takes (dst, src); this package's procedures are all (src, dst)
 	err := os.copy_directory_all(dst, src) if info.type == .Directory else os.copy_file(dst, src)
-	if err != nil {
-		return .ErrorIO
-	}
-	return .Success
+	return status_of(err)
 }
 
 move_file :: proc(src: string, dst: string) -> OperationStatus {
 	err := os.rename(src, dst)
 	if err != nil {
-		// cross-device: copy then delete
+		// only a move across filesystems becomes copy + delete; other failures
+		// (permissions, bad path, full disk) are reported as they are
+		if !is_cross_device(err) do return status_of(err)
 		copy_status := copy_file(src, dst)
 		if copy_status != .Success {
 			return copy_status
@@ -153,43 +185,29 @@ delete_path :: proc(path: string) -> OperationStatus {
 	}
 	// remove_all would follow a symlink to a dir and empty its target
 	err := os.remove(path) if info.type == .Symlink else os.remove_all(path)
-	if err != nil {
-		return .ErrorPermission
-	}
-	return .Success
+	return status_of(err)
 }
 
 rename_path :: proc(old_path: string, new_path: string) -> OperationStatus {
-	err := os.rename(old_path, new_path)
-	if err != nil {
-		return .ErrorIO
-	}
-	return .Success
+	return status_of(os.rename(old_path, new_path))
 }
 
 create_directory :: proc(path: string) -> OperationStatus {
-	err := os.make_directory(path)
-	if err != nil {
-		return .ErrorExists
-	}
-	return .Success
+	return status_of(os.make_directory(path))
 }
 
 path_exists :: proc(path: string) -> bool {
-	context.allocator = context.temp_allocator
-	_, err := os.stat(path, context.allocator)
+	_, err := os.stat(path, context.temp_allocator)
 	return err == nil
 }
 
 get_file_info :: proc(path: string) -> (FileInfo, OperationStatus) {
-	context.allocator = context.temp_allocator
-
-	info, err := os.stat(path, context.allocator)
+	info, err := os.stat(path, context.temp_allocator)
 	if err != nil {
-		return {}, .ErrorNotFound
+		return {}, status_of(err)
 	}
-
-	fi := file_info_from_os(path, info)
+	fi, ok := file_info_from_os(path, info)
+	if !ok do return {}, .ErrorInvalidPath // too long for the C ABI buffer
 	return fi, .Success
 }
 
@@ -289,7 +307,9 @@ trash_path_named :: proc(path: string) -> (OperationStatus, string) {
 	}
 	dst, _ := filepath.join({files, name})
 	if os.rename(abs, dst) != nil {
-		// shortcut: no per-volume trash; files on other filesystems can't be trashed (delete instead)
+		// shortcut: no per-volume trash, so files on other filesystems can't be trashed.
+		// The file is left untouched and ErrorIO returned; deleting it instead is the
+		// caller's (the user's) decision — the GUI suggests Shift+Delete.
 		os.remove(info_path)
 		return .ErrorIO, ""
 	}
@@ -329,8 +349,12 @@ restore_from_trash :: proc(name: string) -> OperationStatus {
 
 // Permanently deletes one trashed item and its .trashinfo.
 delete_from_trash :: proc(name: string) -> OperationStatus {
+	return delete_trashed(trash_dir(context.temp_allocator), name)
+}
+
+@(private)
+delete_trashed :: proc(td, name: string) -> OperationStatus {
 	context.allocator = context.temp_allocator
-	td := trash_dir()
 	src, _ := filepath.join({td, "files", name})
 	status := delete_path(src)
 	info_path, _ := filepath.join({td, "info", strings.concatenate({name, ".trashinfo"})})
@@ -348,7 +372,7 @@ empty_trash :: proc() -> OperationStatus {
 	}
 	result := OperationStatus.Success
 	for fi in infos {
-		if delete_from_trash(fi.name) != .Success {
+		if delete_trashed(td, fi.name) != .Success {
 			result = .ErrorPermission
 		}
 	}
@@ -360,6 +384,7 @@ empty_trash :: proc() -> OperationStatus {
 // ============================================================================
 
 // Shared with a worker thread: read/write the fields with sync atomics.
+// total is set by the caller (from tree_size) before copying; copy_tree only adds to done.
 Progress :: struct {
 	total, done: i64,
 	cancel:      bool,
@@ -382,51 +407,63 @@ tree_size :: proc(path: string, p: ^Progress = nil) -> i64 {
 }
 
 // Recursively copies src to dst (dst must not exist), streaming file data so
-// progress can be reported and the copy cancelled between chunks.
+// progress can be reported and the copy cancelled between chunks. A read or write
+// error fails the copy and removes the partial file: a move deletes the source only
+// after this returns .Success, so a short copy must never look like a finished one.
 copy_tree :: proc(src, dst: string, p: ^Progress) -> OperationStatus {
+	buf := make([]byte, 1 << 20) // one buffer for the whole tree, not one per file
+	defer delete(buf)
+	return copy_tree_buf(src, dst, p, buf)
+}
+
+@(private)
+copy_tree_buf :: proc(src, dst: string, p: ^Progress, buf: []byte) -> OperationStatus {
 	if sync.atomic_load(&p.cancel) do return .Cancelled
 	info, err := os.lstat(src, context.temp_allocator)
-	if err != nil do return .ErrorNotFound
+	if err != nil do return status_of(err)
 	if path_exists(dst) do return .ErrorExists
 	#partial switch info.type {
 	case .Directory:
-		if os.make_directory(dst) != nil do return .ErrorPermission
+		if e := os.make_directory(dst); e != nil do return status_of(e)
 		os.change_mode(dst, info.mode)
 		infos, rerr := os.read_all_directory_by_path(src, context.temp_allocator)
-		if rerr != nil do return .ErrorPermission
+		if rerr != nil do return status_of(rerr)
 		for fi in infos {
+			// each child's temp memory (paths, listings) is released before the next one
+			runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
 			d, _ := filepath.join({dst, fi.name}, context.temp_allocator)
-			if st := copy_tree(fi.fullpath, d, p); st != .Success do return st
+			if st := copy_tree_buf(fi.fullpath, d, p, buf); st != .Success do return st
 		}
 		return .Success
 	case .Symlink:
 		target, lerr := os.read_link(src, context.temp_allocator)
-		if lerr != nil || os.symlink(target, dst) != nil do return .ErrorIO
-		return .Success
+		if lerr != nil do return status_of(lerr)
+		return status_of(os.symlink(target, dst))
 	}
 	in_f, oerr := os.open(src)
-	if oerr != nil do return .ErrorPermission
+	if oerr != nil do return status_of(oerr)
 	defer os.close(in_f)
 	out_f, cerr := os.open(dst, {.Write, .Create, .Excl, .Trunc}, info.mode)
-	if cerr != nil do return .ErrorPermission
-	buf := make([]byte, 1 << 20, context.temp_allocator)
+	if cerr != nil do return status_of(cerr)
+	fail :: proc(out_f: ^os.File, dst: string, st: OperationStatus) -> OperationStatus {
+		os.close(out_f)
+		os.remove(dst) // drop the half-written file only
+		return st
+	}
 	for {
-		if sync.atomic_load(&p.cancel) {
-			os.close(out_f)
-			os.remove(dst) // drop the half-written file only
-			return .Cancelled
-		}
+		if sync.atomic_load(&p.cancel) do return fail(out_f, dst, .Cancelled)
 		n, rerr := os.read(in_f, buf)
 		if n > 0 {
-			if w, werr := os.write(out_f, buf[:n]); werr != nil || w != n {
-				os.close(out_f)
-				os.remove(dst)
-				return .ErrorIO
-			}
+			if w, werr := os.write(out_f, buf[:n]); werr != nil || w != n do return fail(out_f, dst, .ErrorIO)
 			sync.atomic_add(&p.done, i64(n))
 		}
-		if rerr != nil || n == 0 do break
+		if rerr == io.Error.EOF || (rerr == nil && n == 0) do break
+		if rerr != nil do return fail(out_f, dst, .ErrorIO) // a failed read is not the end of the file
 	}
-	os.close(out_f)
+	// close reports delayed write errors (full disk, network filesystems)
+	if os.close(out_f) != nil {
+		os.remove(dst)
+		return .ErrorIO
+	}
 	return .Success
 }

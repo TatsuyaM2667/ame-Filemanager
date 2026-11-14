@@ -52,7 +52,8 @@ git_worker :: proc(r: ^Git_Req) {
 	_, pre, _, e1 := os.process_exec({command = {"git", "-C", r.cwd, "rev-parse", "--show-prefix"}}, context.temp_allocator)
 	if e1 != nil do return
 	prefix := strings.trim_space(string(pre))
-	_, out, _, e2 := os.process_exec({command = {"git", "-C", r.cwd, "status", "--porcelain=v1", "-z", "--untracked-files=normal", "--ignore-submodules"}}, context.temp_allocator)
+	if !repo_config_safe(r.cwd) do return // no dots rather than running the repo's commands
+	_, out, _, e2 := os.process_exec({command = {"git", "-C", r.cwd, "-c", "core.fsmonitor=false", "status", "--porcelain=v1", "-z", "--untracked-files=normal", "--ignore-submodules", "--no-optional-locks"}}, context.temp_allocator)
 	if e2 != nil do return
 	fields := strings.split(string(out), "\x00", context.temp_allocator)
 	for i := 0; i < len(fields); i += 1 {
@@ -71,6 +72,26 @@ git_worker :: proc(r: ^Git_Req) {
 		else do r.result[first] = code
 	}
 	free_all(context.temp_allocator)
+}
+
+// `git status` runs commands named in the repository's own config: core.fsmonitor, and
+// filter.<x>.clean/process when it re-hashes changed files. A downloaded or extracted repo
+// could use that to run code just because we opened its folder, so such repos get no
+// status. Settings from the user's own (global/system) config are trusted.
+repo_config_safe :: proc(dir: string) -> bool {
+	_, out, _, err := os.process_exec({command = {"git", "-C", dir, "config", "--show-scope", "--get-regexp", `^(core\.fsmonitor|filter\..*\.(clean|smudge|process))$`}}, context.temp_allocator)
+	if err != nil do return false
+	return repo_lines_safe(string(out))
+}
+
+// Lines of `git config --show-scope`: anything set by the repository itself is unsafe.
+repo_lines_safe :: proc(out: string) -> bool {
+	text := out
+	for line in strings.split_lines_iterator(&text) {
+		scope, _, _ := strings.partition(line, "\t")
+		if scope == "local" || scope == "worktree" || scope == "command" do return false
+	}
+	return true
 }
 
 clear_git :: proc(m: ^map[string]u8) {

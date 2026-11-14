@@ -887,7 +887,7 @@ receive_mime :: proc(o: Proxy, mime: cstring) -> []u8 {
 	wl_display_flush(w.display)
 	data := make([dynamic]u8, context.temp_allocator)
 	buf: [4096]u8
-	for {
+	for len(data) < 256 << 20 { // another app's clipboard: never more than 256 MB
 		pfd := posix.pollfd{fd = fds[0], events = {.IN}}
 		if posix.poll(&pfd, 1, 1000) <= 0 do break // the other app didn't answer in time
 		n := posix.read(fds[0], &buf[0], len(buf))

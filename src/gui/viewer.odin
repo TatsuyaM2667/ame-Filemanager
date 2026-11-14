@@ -180,7 +180,7 @@ svg_render_file :: proc(path: string, max_side: int) -> (img: []u32, w, h: int) 
 
 @(private = "file")
 unzip_member :: proc(path, member: string) -> string {
-	_, out, _, err := os.process_exec({command = {"bsdtar", "-xOf", path, member}}, context.temp_allocator)
+	_, out, _, err := os.process_exec({command = {"bsdtar", "-xOf", path, "--", member}}, context.temp_allocator) // "--": a member named "-T…" stays a name
 	return string(out) if err == nil else ""
 }
 

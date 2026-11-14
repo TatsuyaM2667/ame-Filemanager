@@ -301,6 +301,7 @@ fill_edges :: proc(edges: []Edge, size: int, evenodd: bool, cov: []f32) {
 			sy := f32(py) + (f32(s) + 0.5) / SS
 			clear(&xs)
 			for e in edges {
+				if !(abs(e.x0) < 1e7 && abs(e.x1) < 1e7 && abs(e.y0) < 1e7 && abs(e.y1) < 1e7) do continue // NaN / absurd
 				lo, hi := min(e.y0, e.y1), max(e.y0, e.y1)
 				if sy < lo || sy >= hi do continue
 				append(&xs, Xing{e.x0 + (sy - e.y0) * (e.x1 - e.x0) / (e.y1 - e.y0), e.dir})
@@ -528,6 +529,7 @@ svg_rasterize :: proc(svg: string, size: int, allocator := context.allocator) ->
 				vb = make([dynamic]f32, context.temp_allocator)
 				append(&vb, 0, 0, ww if ww > 0 else 24, hh if hh > 0 else 24)
 			}
+			if !(vb[2] > 0 && vb[3] > 0 && vb[2] < 1e6 && vb[3] < 1e6) do return img // broken viewBox: blank, not NaN coordinates
 			k := f32(size) / max(vb[2], vb[3])
 			ox := (f32(size) - vb[2] * k) / 2 - vb[0] * k
 			oy := (f32(size) - vb[3] * k) / 2 - vb[1] * k

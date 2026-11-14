@@ -139,6 +139,11 @@ exec_argv :: proc(exec, path: string) -> [dynamic]string {
 			strings.write_byte(&b, exec[i])
 		case (c == ' ' || c == '\t') && !quoted:
 			flush(&argv, &b, &have)
+		case c == '%' && quoted && i + 1 < len(exec):
+			// the spec forbids field codes inside quotes; expanding them there would let a file
+			// name with quotes or $(…) inject commands into e.g. sh -c "… %f"
+			i += 1
+			if exec[i] == '%' do strings.write_byte(&b, '%')
 		case c == '%' && i + 1 < len(exec):
 			i += 1
 			switch exec[i] {

@@ -49,7 +49,15 @@ op_worker :: proc(op: ^Op) {
 	// moves within a filesystem are instant renames; everything else is streamed
 	todo := make([dynamic]int, context.temp_allocator)
 	for pr, i in op.pairs {
-		if op.move && os.rename(pr[0], pr[1]) == nil do continue
+		if op.move {
+			err := os.rename(pr[0], pr[1])
+			if err == nil do continue
+			if !gf.is_cross_device(err) { // permissions, bad path…: report, don't copy + delete
+				op.failed += 1
+				op.last_err = gf.status_of(err)
+				continue
+			}
+		}
 		append(&todo, i)
 	}
 	total: i64
