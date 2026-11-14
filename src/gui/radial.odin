@@ -26,6 +26,8 @@ act_icon :: proc(a: Act) -> rune {
 	case .Copy:            return 0xf0c5
 	case .Copy_Path:       return 0xf0c1 // link
 	case .Sort_Menu:       return I_SORT_MENU
+	case .Open_Menu:       return 0xf07c // folder-open
+	case .Open_With_Menu, .Open_With: return 0xf135 // rocket
 	case .Sort_Dir:        return 0xf160 if !app.sort_desc else 0xf161
 	case .Dirs_First:      return 0xf07b
 	case .Group_Menu:      return 0xf247 // object-group
@@ -168,7 +170,9 @@ draw_menu :: proc() {
 		fg := mix(FG if it.ok else with_alpha(FG, 80), hex(0x060913), g)
 		lr := (r0 + ro) / 2
 		lx, ly := cx + math.cos(mid) * lr, cy + math.sin(mid) * lr
-		glyph_center({lx - px(14), ly - px(22), px(28), px(24)}, act_icon(it.act), fs(15 + 2 * g), fg)
+		if !draw_app_icon(it.image, lx, ly - px(10), px(24 + 3 * g)) {
+			glyph_center({lx - px(14), ly - px(22), px(28), px(24)}, act_icon(it.act), fs(15 + 2 * g), fg)
+		}
 		arc := (lr * step) * 0.86
 		// long labels wrap onto a second line instead of being cut ("パスを / コピー")
 		l1, l2 := split_label(short(it.label), fs(11), arc)

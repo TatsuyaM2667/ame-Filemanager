@@ -348,3 +348,41 @@ test_any_folder_badge :: proc(t: ^testing.T) {
 	l, ok = project_of(dir)
 	testing.expect(t, ok && l.label == "PHP")
 }
+
+@(test)
+test_open_with :: proc(t: ^testing.T) {
+	e, ok := parse_desktop("[Desktop Entry]\nType=Application\nName=Seoritsu\nName[ja]=セオリツ\nExec=/home/u/.local/bin/seoritsu %F\nIcon=seoritsu\nMimeType=text/plain;inode/directory;\n[Desktop Action new]\nName=Other\n")
+	testing.expect(t, ok)
+	testing.expect_value(t, e.name, "セオリツ")
+	_, ok = parse_desktop("[Desktop Entry]\nType=Application\nName=Yazi\nExec=yazi %f\nTerminal=true\n")
+	testing.expect(t, !ok) // terminal apps need a terminal to run in
+
+	argv := exec_argv(`"/opt/My Editor/bin/ed" --new-window %F %i`, "/home/u/My Project")
+	testing.expect_value(t, len(argv), 3)
+	testing.expect_value(t, argv[0], "/opt/My Editor/bin/ed")
+	testing.expect_value(t, argv[2], "/home/u/My Project")
+	argv = exec_argv("thunar %U", "/tmp/a b")
+	testing.expect_value(t, argv[1], "file:///tmp/a%20b")
+
+	// only apps that declare inode/directory, user entries shadowing system ones
+	root := "/tmp/ame-fm-test-apps"
+	_ = os.remove_all(root)
+	defer _ = os.remove_all(root)
+	_ = os.make_directory_all("/tmp/ame-fm-test-apps/home/applications")
+	_ = os.make_directory_all("/tmp/ame-fm-test-apps/sys/applications")
+	_ = os.write_entire_file_from_string("/tmp/ame-fm-test-apps/home/applications/ed.desktop", "[Desktop Entry]\nType=Application\nName=Editor\nExec=ed %F\nMimeType=inode/directory;\n")
+	_ = os.write_entire_file_from_string("/tmp/ame-fm-test-apps/sys/applications/ed.desktop", "[Desktop Entry]\nType=Application\nName=Old Editor\nExec=old %F\nMimeType=inode/directory;\n")
+	_ = os.write_entire_file_from_string("/tmp/ame-fm-test-apps/sys/applications/viewer.desktop", "[Desktop Entry]\nType=Application\nName=Viewer\nExec=v %f\nMimeType=image/png;\n")
+	old_home, old_dirs := os.get_env("XDG_DATA_HOME", context.temp_allocator), os.get_env("XDG_DATA_DIRS", context.temp_allocator)
+	posix.setenv("XDG_DATA_HOME", "/tmp/ame-fm-test-apps/home", true)
+	posix.setenv("XDG_DATA_DIRS", "/tmp/ame-fm-test-apps/sys", true)
+	defer {
+		if old_home != "" do posix.setenv("XDG_DATA_HOME", strings.clone_to_cstring(old_home, context.temp_allocator), true)
+		else do posix.unsetenv("XDG_DATA_HOME")
+		if old_dirs != "" do posix.setenv("XDG_DATA_DIRS", strings.clone_to_cstring(old_dirs, context.temp_allocator), true)
+		else do posix.unsetenv("XDG_DATA_DIRS")
+	}
+	find_apps("inode/directory")
+	testing.expect_value(t, len(open_with), 1)
+	if len(open_with) == 1 do testing.expect_value(t, open_with[0].name, "Editor")
+}

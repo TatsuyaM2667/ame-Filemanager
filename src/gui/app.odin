@@ -80,6 +80,7 @@ Act :: enum {
 	Side_Menu, Bookmark, Remove_Bookmark, Props, Rule, Unrule, Play_All,
 	Tag_Pick, Tag_New, Tag_Rename, Tag_Delete, View_Tree, Tree_Toggle, Play_Entry, Play_Dir, Copy_Path,
 	Sort_Menu, Sort_By, Sort_Dir, Dirs_First, Group_Menu, Group_By, New_File, Select_Pattern,
+	Open_Menu, Open_With_Menu, Open_With,
 }
 
 Pending :: struct {
@@ -116,6 +117,7 @@ Menu_Item :: struct {
 	arg:     int, // passed to the action when has_arg (sort key, group)
 	has_arg: bool,
 	on:      bool, // current choice: drawn highlighted
+	image:   string, // SVG icon path (apps in "open with"), instead of the action's glyph
 }
 
 Tab :: struct {
@@ -799,6 +801,9 @@ run_pending :: proc() {
 			refilter()
 			remember_sort()
 		case .Sort_Menu:  open_sort_menu()
+		case .Open_Menu:  open_open_menu()
+		case .Open_With_Menu: open_with_menu()
+		case .Open_With:  launch_app(p.i)
 		case .Group_Menu: open_group_menu()
 		case .Sort_By:
 			app.sort = Sort_Key(p.i)
@@ -921,8 +926,8 @@ open_menu :: proc(vi: int, main_menu: bool) {
 		add("元に戻す", .Restore)
 		add("完全に削除…", .Delete, "Delete")
 	} else if vi >= 0 {
-		add("開く", .Open, "Enter")
-		if n == 1 && app.entries[vi].is_dir do add("新しいタブで開く", .New_Tab, "中クリック")
+		if n == 1 do add("開く…", .Open_Menu) // → 開く / 新しいタブで開く / アプリから開く…
+		else do add("開く", .Open, "Enter")
 		if n == 1 && app.entries[vi].is_dir do add("音楽を再生", .Play_Dir)
 		if n == 1 {
 			if _, _, ok := archive_kind(app.entries[vi].name); ok do add("ここに展開", .Extract)
