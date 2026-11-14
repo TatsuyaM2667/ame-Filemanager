@@ -4,6 +4,9 @@ import "core:os"
 import "core:sys/posix"
 import "core:strings"
 import "core:testing"
+import "core:log"
+import "core:slice"
+import "core:math"
 import "core:time"
 import "core:unicode/utf8"
 
@@ -317,4 +320,29 @@ test_session_roundtrip :: proc(t: ^testing.T) {
 	testing.expect_value(t, len(paths), 2)
 	testing.expect_value(t, cur, 1)
 	testing.expect_value(t, paths[1], "/tmp/ame-fm-test-session/b")
+}
+
+@(test)
+test_ring_seg_area :: proc(t: ^testing.T) {
+	saved := cv
+	defer cv = saved
+	buf := make([]u32, 400 * 400, context.temp_allocator)
+	cv = Canvas{px = raw_data(buf), w = 400, h = 400, stride = 400, clip = {0, 0, 400, 400}}
+	area :: proc(buf: []u32) -> f32 {
+		a: f32
+		for p in buf do a += f32(p >> 24) / 255
+		return a
+	}
+	for spec in ([][3]f32{{0, math.PI / 2, 0.25}, {0.3, 0.3 + 1.5 * math.PI, 0.75}, {0, 2 * math.PI, 1}, {-2.8, -2.2, 0.6 / (2 * math.PI)}}) {
+		slice.fill(buf, 0)
+		ring_seg(200, 200, 50, 150, spec[0], spec[1], {255, 255, 255, 255})
+		want := spec[2] * math.PI * (150 * 150 - 50 * 50)
+		testing.expectf(t, abs(area(buf) - want) < want * 0.01, "sector %v: area %v, want %v", spec, area(buf), want)
+	}
+	// speed: a 12-slice menu ring
+	start := time.tick_now()
+	for _ in 0 ..< 20 do for k in 0 ..< 12 do ring_seg(200, 200, 54, 172, f32(k) * math.PI / 6, f32(k + 1) * math.PI / 6 - 0.04, {30, 30, 50, 245})
+	ms := time.duration_milliseconds(time.tick_since(start)) / 20
+	testing.expectf(t, ms < 4, "12 slices took %.2f ms", ms)
+	log.infof("12-slice ring: %.2f ms", ms)
 }

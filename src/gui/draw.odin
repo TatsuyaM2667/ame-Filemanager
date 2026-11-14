@@ -247,29 +247,63 @@ file_icon :: proc(x, y, s: f32, kind: Kind, name := "") {
 
 // Anti-aliased ring sector between radii r0..r1 and angles a0..a1 (radians, clockwise from +x).
 ring_seg :: proc(cx, cy, r0, r1, a0, a1: f32, c: Color) {
-	x0 := max(i32(cx - r1 - 1), cv.clip[0])
-	y0 := max(i32(cy - r1 - 1), cv.clip[1])
-	x1 := min(i32(cx + r1 + 2), cv.clip[2])
-	y1 := min(i32(cy + r1 + 2), cv.clip[3])
+	if r1 <= 0 || a1 <= a0 do return
 	full := a1 - a0 >= 2 * math.PI - 0.001
-	mid := (a0 + a1) / 2
-	half := (a1 - a0) / 2
+	// bounding box of the sector only (not of the whole circle)
+	bx0, by0, bx1, by1 := cx - r1, cy - r1, cx + r1, cy + r1
+	if !full {
+		bx0, by0, bx1, by1 = cx, cy, cx, cy
+		grow :: proc(b: ^[4]f32, x, y: f32) {b[0] = min(b[0], x); b[1] = min(b[1], y); b[2] = max(b[2], x); b[3] = max(b[3], y)}
+		bb := [4]f32{bx0, by0, bx1, by1}
+		if r0 > 0 do bb = {cx + math.cos(a0) * r0, cy + math.sin(a0) * r0, cx + math.cos(a0) * r0, cy + math.sin(a0) * r0}
+		for a in ([2]f32{a0, a1}) {
+			grow(&bb, cx + math.cos(a) * r1, cy + math.sin(a) * r1)
+			grow(&bb, cx + math.cos(a) * r0, cy + math.sin(a) * r0)
+		}
+		for k := math.ceil(a0 / (math.PI / 2)); k * (math.PI / 2) < a1; k += 1 { // axis extremes inside the arc
+			a := k * (math.PI / 2)
+			grow(&bb, cx + math.cos(a) * r1, cy + math.sin(a) * r1)
+		}
+		bx0, by0, bx1, by1 = bb[0], bb[1], bb[2], bb[3]
+	}
+	x0 := max(i32(bx0 - 1), cv.clip[0])
+	y0 := max(i32(by0 - 1), cv.clip[1])
+	x1 := min(i32(bx1 + 2), cv.clip[2])
+	y1 := min(i32(by1 + 2), cv.clip[3])
+	// squared radii: outside the band skip, inside it no sqrt (full coverage)
+	ro2 := (r1 + 0.5) * (r1 + 0.5)
+	ri2 := max(r0 - 0.5, 0) * max(r0 - 0.5, 0)
+	in_full := (r0 + 0.5) * (r0 + 0.5) if r0 > 0 else 0
+	out_full := max(r1 - 0.5, 0) * max(r1 - 0.5, 0)
+	// angular edges as half-planes: cross products are the distance in px to each edge
+	ux0, uy0 := math.cos(a0), math.sin(a0)
+	ux1, uy1 := math.cos(a1), math.sin(a1)
+	wide := a1 - a0 > math.PI
 	for y in y0 ..< y1 {
 		dy := f32(y) + 0.5 - cy
-		for x in x0 ..< x1 {
+		dy2 := dy * dy
+		if dy2 >= ro2 do continue
+		half := math.sqrt(ro2 - dy2)
+		xs := max(x0, i32(cx - half))
+		xe := min(x1, i32(cx + half) + 1)
+		row := cv.px[y * cv.stride:]
+		for x in xs ..< xe {
 			dx := f32(x) + 0.5 - cx
-			d := math.sqrt(dx * dx + dy * dy)
-			cov := clamp(d - r0 + 0.5, 0, 1) * clamp(r1 - d + 0.5, 0, 1)
-			if cov <= 0 do continue
-			if !full {
-				// angular distance to the sector, converted to px along the arc for AA
-				da := math.atan2(dy, dx) - mid
-				for da > math.PI do da -= 2 * math.PI
-				for da < -math.PI do da += 2 * math.PI
-				cov *= clamp((half - abs(da)) * d + 0.5, 0, 1)
+			d2 := dx * dx + dy2
+			if d2 >= ro2 || d2 <= ri2 do continue
+			cov: f32 = 1
+			if d2 < in_full || d2 > out_full {
+				d := math.sqrt(d2)
+				cov = clamp(d - r0 + 0.5, 0, 1) * clamp(r1 - d + 0.5, 0, 1)
 				if cov <= 0 do continue
 			}
-			blend(&cv.px[y * cv.stride + x], c, u32(cov * 255))
+			if !full {
+				e0 := clamp(ux0 * dy - uy0 * dx + 0.5, 0, 1) // after the start edge
+				e1 := clamp(dx * uy1 - dy * ux1 + 0.5, 0, 1) // before the end edge
+				cov *= max(e0, e1) if wide else e0 * e1
+				if cov <= 0 do continue
+			}
+			blend(&row[x], c, u32(cov * 255))
 		}
 	}
 }
