@@ -2153,14 +2153,14 @@ main :: proc() {
 	load_tags()
 	append(&app.tabs, Tab{})
 
-	start := app.home
-	restored := false
+	project_async = true
+	start := app.home // a plain start always opens Home
 	if len(os.args) > 1 {
 		start = os.args[1]
 		if strings.has_prefix(start, "file://") do start = start[7:]
 		if !os.is_dir(start) do start = filepath.dir(start)
-	} else do restored = restore_session() // last time's tabs
-	if !restored && !go_to(start) do go_to(app.home)
+	}
+	if !go_to(start) do go_to(app.home)
 	dump_path := os.get_env("GF_DUMP", context.allocator)
 	watch_init()
 	load_rules()
@@ -2276,7 +2276,6 @@ main :: proc() {
 		}
 		remove_range(&events, 0, n)
 	}
-	if dump_path == "" do save_session()
 	// leave nothing running behind
 	music_stop()
 	for op in ops do sync.atomic_store(&op.prog.cancel, true)

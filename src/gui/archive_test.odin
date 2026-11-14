@@ -241,12 +241,12 @@ test_project_live_update :: proc(t: ^testing.T) {
 	_ = os.make_directory_all("/tmp/ame-fm-test-live/src")
 	_ = os.write_entire_file_from_string("/tmp/ame-fm-test-live/build.zig", "const std = @import(\"std\");")
 	_ = os.write_entire_file_from_string("/tmp/ame-fm-test-live/src/main.zig", "pub fn main() void {}")
+	frame_no = 0
 	l, ok := project_of(dir)
 	testing.expect(t, ok && l.label == "Zig")
 	// later: lots of Odin arrives in src/ (a download, new files, edits)
 	_ = os.write_entire_file_from_string("/tmp/ame-fm-test-live/src/app.odin", strings.repeat("x := 1\n", 300, context.temp_allocator))
 	dirs := make([dynamic]string, context.temp_allocator)
-	frame_no = 0
 	project_watch_dirs(&dirs)
 	watched_src := false
 	for d in dirs do if d == "/tmp/ame-fm-test-live/src" do watched_src = true
@@ -300,29 +300,6 @@ test_new_features :: proc(t: ^testing.T) {
 }
 
 @(test)
-test_session_roundtrip :: proc(t: ^testing.T) {
-	old_xdg := os.get_env("XDG_CONFIG_HOME", context.temp_allocator)
-	posix.setenv("XDG_CONFIG_HOME", "/tmp/ame-fm-test-session", true) // never touch the user's config
-	defer {
-		if old_xdg != "" do posix.setenv("XDG_CONFIG_HOME", strings.clone_to_cstring(old_xdg, context.temp_allocator), true)
-		else do posix.unsetenv("XDG_CONFIG_HOME")
-		_ = os.remove_all("/tmp/ame-fm-test-session")
-	}
-	_ = os.make_directory_all("/tmp/ame-fm-test-session/a")
-	_ = os.make_directory_all("/tmp/ame-fm-test-session/b")
-	saved_tabs, saved_cur, saved_cwd := app.tabs, app.cur_tab, app.cwd
-	defer app.tabs, app.cur_tab, app.cwd = saved_tabs, saved_cur, saved_cwd
-	app.tabs = make([dynamic]Tab, context.temp_allocator)
-	append(&app.tabs, Tab{cwd = strings.clone("/tmp/ame-fm-test-session/a")}, Tab{cwd = strings.clone("/tmp/ame-fm-test-session/b")})
-	app.cur_tab, app.cwd = 1, strings.clone("/tmp/ame-fm-test-session/b")
-	save_session()
-	paths, cur := session_load() // what the next start reopens
-	testing.expect_value(t, len(paths), 2)
-	testing.expect_value(t, cur, 1)
-	testing.expect_value(t, paths[1], "/tmp/ame-fm-test-session/b")
-}
-
-@(test)
 test_ring_seg_area :: proc(t: ^testing.T) {
 	saved := cv
 	defer cv = saved
@@ -345,4 +322,29 @@ test_ring_seg_area :: proc(t: ^testing.T) {
 	ms := time.duration_milliseconds(time.tick_since(start)) / 20
 	testing.expectf(t, ms < 4, "12 slices took %.2f ms", ms)
 	log.infof("12-slice ring: %.2f ms", ms)
+}
+
+@(test)
+test_any_folder_badge :: proc(t: ^testing.T) {
+	dir := "/tmp/ame-fm-test-php"
+	_ = os.remove_all(dir)
+	defer _ = os.remove_all(dir)
+	defer projects_clear()
+	_ = os.make_directory_all("/tmp/ame-fm-test-php/lib")
+	_ = os.write_entire_file_from_string("/tmp/ame-fm-test-php/index.php", "<?php echo 1;")
+	_ = os.write_entire_file_from_string("/tmp/ame-fm-test-php/lib/db.php", "<?php // db")
+	_ = os.write_entire_file_from_string("/tmp/ame-fm-test-php/notes.md", strings.repeat("long notes\n", 200, context.temp_allocator))
+	l, ok := project_detect(dir)
+	testing.expect(t, ok && l.label == "PHP") // no composer.json, no .git: still PHP (docs don't count)
+
+	// on the worker thread: nothing at first, the badge once the result is in
+	project_async = true
+	defer project_async = false
+	frame_no = 7
+	l, ok = project_of(dir)
+	testing.expect(t, !ok)
+	deadline := time.tick_now()
+	for !project_tick() && time.duration_seconds(time.tick_since(deadline)) < 3 do time.sleep(5 * time.Millisecond)
+	l, ok = project_of(dir)
+	testing.expect(t, ok && l.label == "PHP")
 }

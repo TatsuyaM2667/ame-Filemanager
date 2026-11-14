@@ -7,7 +7,6 @@ package main
 // - Tab completion in the path bar (Dolphin, shells)
 // - Item counts for folders in list view (Nautilus, Finder)
 // - Free space of the current drive at the bottom of the sidebar (Dolphin, Finder)
-// - Tabs come back after a restart (browsers)
 
 import "core:c/libc"
 import "core:fmt"
@@ -231,52 +230,4 @@ draw_free_space :: proc(w, H: f32) {
 	bar := Rect{px(18), r.y + px(32), w - px(36), px(6)}
 	rrect(bar, px(3), hex(0xffffff, 25))
 	rrect({bar.x, bar.y, max(bar.h, bar.w * used), bar.h}, px(3), DANGER if used > 0.9 else ACCENT)
-}
-
-// ---------------------------------------------------------------------------
-// Session: the tabs are reopened at the next start (when no folder is given)
-
-@(private = "file")
-session_path :: proc() -> string {
-	p, _ := filepath.join({app_config_dir(), "session.conf"}, context.temp_allocator)
-	return p
-}
-
-save_session :: proc() {
-	save_tab()
-	b := strings.builder_make(context.temp_allocator)
-	fmt.sbprintf(&b, "cur\t%d\n", app.cur_tab)
-	for t in app.tabs do if !strings.contains_rune(t.cwd, '\n') do fmt.sbprintf(&b, "tab\t%s\n", t.cwd)
-	_ = os.make_directory_all(app_config_dir())
-	_ = os.write_entire_file_from_string(session_path(), strings.to_string(b))
-}
-
-// The saved tabs that still exist, and which one was current.
-session_load :: proc() -> (paths: [dynamic]string, cur: int) {
-	paths = make([dynamic]string, context.temp_allocator)
-	data, err := os.read_entire_file_from_path(session_path(), context.temp_allocator)
-	if err != nil do return
-	text := string(data)
-	for line in strings.split_lines_iterator(&text) {
-		k, _, v := strings.partition(line, "\t")
-		switch k {
-		case "cur": cur = max(0, int(libc.atoi(strings.clone_to_cstring(v, context.temp_allocator))))
-		case "tab": if os.is_dir(v) || strings.has_prefix(v, "tag:") do append(&paths, v)
-		}
-	}
-	return
-}
-
-// Recreates the saved tabs; false if there is nothing (usable) to restore.
-restore_session :: proc() -> bool {
-	paths, cur := session_load()
-	if len(paths) == 0 do return false
-	for p, i in paths {
-		if i == 0 {
-			delete(app.tabs[0].cwd)
-			app.tabs[0].cwd = strings.clone(p)
-		} else do append(&app.tabs, Tab{cwd = strings.clone(p)})
-	}
-	activate_tab(min(cur, len(app.tabs) - 1))
-	return true
 }

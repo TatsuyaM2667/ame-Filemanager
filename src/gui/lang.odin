@@ -11,6 +11,8 @@ import "core:path/filepath"
 import "core:slice"
 import "core:strconv"
 import "core:strings"
+import "core:sync"
+import "core:thread"
 
 Lang :: struct {
 	icon:  string, // assets/icons/<icon>.svg
@@ -210,10 +212,70 @@ draw_lang :: proc(r: Rect, l: Lang, size: f32) {
 // the project is on screen, and a change anywhere in them re-detects it shortly after.
 @(private = "file")
 Project :: struct {
+	lang:    Lang,
+	ok:      bool,
+	pending: bool, // being (re)detected by the worker; the old badge stays meanwhile
+	dirs:    [dynamic]string, // root + the subfolders main_language walked
+	seen:    u64, // frame it was last drawn in
+}
+
+// Detection walks up to 4000 entries per folder, so it runs on a worker thread:
+// the badge appears when ready and scrolling never waits for the disk.
+project_async := false // set at startup; tests detect synchronously
+
+@(private = "file")
+Done :: struct {
+	dir:  string,
+	gen:  int,
 	lang: Lang,
 	ok:   bool,
-	dirs: [dynamic]string, // root + the subfolders main_language walked
-	seen: u64, // frame it was last drawn in
+	dirs: [dynamic]string,
+}
+@(private = "file") q: struct {
+	lock: sync.Mutex,
+	sema: sync.Sema,
+	jobs: [dynamic]string, // newest last; the worker takes newest first (what just scrolled into view)
+	done: [dynamic]Done,
+	gen:  int, // bumped on navigation: results for the old folder are dropped
+	th:   ^thread.Thread,
+}
+
+@(private = "file")
+project_worker :: proc() {
+	for {
+		sync.sema_wait(&q.sema)
+		sync.mutex_lock(&q.lock)
+		if len(q.jobs) == 0 {
+			sync.mutex_unlock(&q.lock)
+			continue
+		}
+		dir := pop(&q.jobs)
+		gen := q.gen
+		sync.mutex_unlock(&q.lock)
+		dirs := make([dynamic]string)
+		append(&dirs, strings.clone(dir))
+		lang, ok := project_detect(dir, &dirs)
+		free_all(context.temp_allocator)
+		sync.mutex_lock(&q.lock)
+		append(&q.done, Done{dir, gen, lang, ok, dirs})
+		sync.mutex_unlock(&q.lock)
+		wake()
+	}
+}
+
+@(private = "file")
+project_queue :: proc(dir: string) {
+	sync.mutex_lock(&q.lock)
+	append(&q.jobs, strings.clone(dir))
+	sync.mutex_unlock(&q.lock)
+	sync.sema_post(&q.sema)
+	if q.th == nil do q.th = thread.create_and_start(project_worker)
+}
+
+@(private = "file")
+free_dirs :: proc(dirs: ^[dynamic]string) {
+	for d in dirs do delete(d)
+	delete(dirs^)
 }
 @(private = "file") projects: map[string]Project // cleared when leaving the folder
 @(private = "file") stale: map[string]i64 // project root → when to re-detect (debounce)
@@ -235,6 +297,11 @@ project_free :: proc(root: string) {
 }
 
 projects_clear :: proc() {
+	sync.mutex_lock(&q.lock)
+	q.gen += 1
+	for d in q.jobs do delete(d)
+	clear(&q.jobs)
+	sync.mutex_unlock(&q.lock)
 	roots := make([dynamic]string, context.temp_allocator)
 	for k in projects do append(&roots, strings.clone(k, context.temp_allocator))
 	for k in roots do project_free(k)
@@ -265,13 +332,43 @@ project_changed :: proc(dir: string) {
 	}
 }
 
-// Re-detects projects whose debounce ran out; true if a redraw is needed.
+// Takes in the worker's results and re-detects projects whose debounce ran out;
+// true if a redraw is needed.
 project_tick :: proc() -> bool {
+	changed := false
+	sync.mutex_lock(&q.lock)
+	done := q.done
+	q.done = {}
+	gen := q.gen
+	sync.mutex_unlock(&q.lock)
+	for &d in done {
+		p, ok := &projects[d.dir]
+		if d.gen == gen && ok {
+			free_dirs(&p.dirs)
+			p.lang, p.ok, p.dirs, p.pending = d.lang, d.ok, d.dirs, false
+			changed = true
+		} else do free_dirs(&d.dirs)
+		delete(d.dir)
+	}
+	delete(done)
+
 	now := ticks_ms()
 	due := make([dynamic]string, context.temp_allocator)
 	for root, t in stale do if now >= t do append(&due, strings.clone(root, context.temp_allocator))
-	for root in due do project_free(root) // the next draw detects it again
-	return len(due) > 0
+	for root in due {
+		if !project_async {
+			project_free(root) // the next draw detects it again
+		} else if p, ok := &projects[root]; ok {
+			k, _ := delete_key(&stale, root)
+			delete(k)
+			if !p.pending {
+				p.pending = true
+				project_queue(root)
+			}
+		}
+		changed = true
+	}
+	return changed
 }
 
 project_deadline :: proc() -> i64 {
@@ -309,7 +406,7 @@ toml_dep :: proc(toml, dep: string) -> bool {
 
 // A framework found in the manifest wins (React, Yew, Django…); otherwise the language
 // with the most source code (by bytes) — so a mostly-Odin repo with a small build.zig
-// is Odin, not Zig. Folders with no manifest, build file or .git get no badge.
+// is Odin, not Zig. Folders without any code get no badge.
 project_detect :: proc(dir: string, dirs: ^[dynamic]string = nil) -> (Lang, bool) {
 	marker: Lang // language a manifest implies, used when no source files are found
 	if pkg, ok := read_small(dir, "package.json"); ok {
@@ -378,11 +475,7 @@ project_detect :: proc(dir: string, dirs: ^[dynamic]string = nil) -> (Lang, bool
 	if exists_in(dir, "go.mod") do marker = LG_GO
 	if exists_in(dir, "build.zig") do marker = LG_ZIG
 
-	is_project := marker.icon != ""
-	if !is_project {
-		for f in ([]string{".git", "Makefile", "CMakeLists.txt", "meson.build", "build.sh", "flake.nix"}) do if exists_in(dir, f) do is_project = true
-	}
-	if !is_project do return {}, false
+	// any folder: whatever language it holds the most of right now
 	if l, ok := main_language(dir, dirs); ok do return l, true
 	return marker, marker.icon != ""
 }
@@ -441,7 +534,10 @@ project_of :: proc(dir: string) -> (Lang, bool) {
 	}
 	p := Project{seen = frame_no}
 	append(&p.dirs, strings.clone(dir))
-	p.lang, p.ok = project_detect(dir, &p.dirs)
+	if project_async {
+		p.pending = true
+		project_queue(dir)
+	} else do p.lang, p.ok = project_detect(dir, &p.dirs)
 	projects[strings.clone(dir)] = p
 	return p.lang, p.ok
 }
