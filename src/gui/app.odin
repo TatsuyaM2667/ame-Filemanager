@@ -63,6 +63,7 @@ Entry :: struct {
 	btime, atime:             i64, // created (0 if unknown) / last accessed
 	is_dir, is_link, hidden:  bool,
 	sel:                      bool,
+	content_hit:              bool, // listed because its text matched the search ("中身")
 	kind:                     Kind,
 }
 
@@ -80,7 +81,7 @@ Act :: enum {
 	Side_Menu, Bookmark, Remove_Bookmark, Props, Rule, Unrule, Play_All,
 	Tag_Pick, Tag_New, Tag_Rename, Tag_Delete, View_Tree, Tree_Toggle, Play_Entry, Play_Dir, Copy_Path,
 	Sort_Menu, Sort_By, Sort_Dir, Dirs_First, Group_Menu, Group_By, New_File, Select_Pattern,
-	Open_Menu, Open_With_Menu, Open_With,
+	Open_Menu, Open_With_Menu, Open_With, Folder_Sizes, Compare, Connect,
 }
 
 Pending :: struct {
@@ -91,7 +92,7 @@ Pending :: struct {
 
 Dialog :: enum {
 	None, Rename, Mkdir, Compress, Confirm_Delete, Confirm_Empty_Trash, Props, Batch_Rename, Tag_Edit, Tag_Pick,
-	New_File, Select_Pattern,
+	New_File, Select_Pattern, Connect,
 }
 
 Focus :: enum {
@@ -294,6 +295,12 @@ kind_of :: proc(name: string, mode: os.Permissions) -> Kind {
 
 load :: proc(path: string) -> bool {
 	dir_counts_clear()
+	if path != app.cwd do folder_sizes_clear() // a reload keeps them
+	if path == RECENT {
+		virtual.arena_free_all(&app.listing)
+		stop_walk()
+		return load_recent_view()
+	}
 	if strings.has_prefix(path, "tag:") {
 		virtual.arena_free_all(&app.listing)
 		stop_walk()
@@ -355,11 +362,14 @@ to_lower :: proc(c: u8) -> u8 {return c + 32 if c >= 'A' && c <= 'Z' else c}
 refilter :: proc() {
 	clear(&app.view)
 	q := strings.to_lower(edit_str(&app.search), context.temp_allocator) if app.searching else ""
-	if q != app.walk_q do start_walk(q)
+	if q != app.walk_q {
+		start_walk(q)
+		content_start(q)
+	}
 	for e, i in app.entries {
 		if i >= app.base_count && q == "" do break
 		if !app.show_hidden && e.hidden do continue
-		if q != "" && !strings.contains(strings.to_lower(filepath.base(e.name), context.temp_allocator), q) do continue
+		if q != "" && !e.content_hit && !strings.contains(strings.to_lower(filepath.base(e.name), context.temp_allocator), q) do continue
 		append(&app.view, i)
 	}
 	prepare_sort()
@@ -375,7 +385,7 @@ Nav :: enum {
 
 go_to :: proc(path: string, mode := Nav.Push, select_name := "") -> bool {
 	p := path
-	if !strings.has_prefix(p, "tag:") {
+	if !strings.has_prefix(p, "tag:") && p != RECENT {
 		if !filepath.is_abs(p) do p, _ = filepath.join({app.cwd, p}, context.temp_allocator)
 		p, _ = filepath.clean(p, context.temp_allocator)
 	}
@@ -438,6 +448,7 @@ in_trash :: proc() -> bool {
 
 location_name :: proc() -> string {
 	if in_trash() do return "ゴミ箱"
+	if is_recent_view() do return "最近使用したファイル"
 	if is_tag_view() {
 		id, _ := strconv.parse_uint(app.cwd[4:])
 		if t := tag_by_id(u8(id)); t != nil do return t.name
@@ -634,6 +645,7 @@ name_problem :: proc(name: string, allow := "", dir := "") -> string {
 dialog_ok :: proc() {
 	switch app.dialog {
 	case .New_File:       new_file_ok()
+	case .Connect:        connect_ok()
 	case .Select_Pattern: select_pattern_ok()
 	case .Rename:
 		vi := app.dialog_target
@@ -807,6 +819,9 @@ run_pending :: proc() {
 		case .Open_Menu:  open_open_menu()
 		case .Open_With_Menu: open_with_menu()
 		case .Open_With:  launch_app(p.i)
+		case .Folder_Sizes: folder_sizes_start()
+		case .Compare:      compare_selected()
+		case .Connect:      begin_connect()
 		case .Group_Menu: open_group_menu()
 		case .Sort_By:
 			app.sort = Sort_Key(p.i)
@@ -867,7 +882,7 @@ run_pending :: proc() {
 		case .Tag_New:  tag_begin_edit(-1)
 		case .Tag_Rename:
 			id := menu_tag_id
-			if id < 0 && is_tag_view() {
+			if id < 0 && is_tag_view() && !is_recent_view() {
 				v, _ := strconv.parse_uint(app.cwd[4:])
 				id = int(v)
 			}
@@ -914,6 +929,7 @@ open_menu :: proc(vi: int, main_menu: bool) {
 		add("新しいフォルダー…", .Mkdir, "Shift+Ctrl+N", !in_trash())
 		add("新しいファイル…", .New_File, "", !in_trash() && !is_tag_view())
 		add("端末で開く", .Terminal, "", !in_trash())
+		add("サーバーへ接続…", .Connect)
 		sep()
 		add("アイコン表示", .View_Grid, "Ctrl+2")
 		add("一覧表示", .View_List, "Ctrl+1")
@@ -937,11 +953,16 @@ open_menu :: proc(vi: int, main_menu: bool) {
 		}
 		if cat_of(app.entries[vi].name) != .None do add("変換…", .Convert, "Ctrl+ドラッグ")
 		add("プレビュー", .Preview, "Space")
+		if n == 2 {
+			s := selection()
+			if !app.entries[s[0]].is_dir && !app.entries[s[1]].is_dir do add("比較", .Compare)
+		}
 		add("圧縮…", .Compress)
 		sep()
 		add("切り取り", .Cut, "Ctrl+X")
 		add("コピー", .Copy, "Ctrl+C")
 		add("パスをコピー", .Copy_Path, "Shift+Ctrl+C")
+		if app.entries[vi].is_dir do add("サイズを計算", .Folder_Sizes)
 		add("名前を変更…" if n == 1 else "まとめて名前を変更…", .Rename, "F2")
 		if n == 1 && app.entries[vi].is_dir do add("ブックマークに追加", .Bookmark, "Ctrl+D")
 		add("プロパティ", .Props, "Ctrl+I")
@@ -952,7 +973,7 @@ open_menu :: proc(vi: int, main_menu: bool) {
 		add("完全に削除…", .Delete, "Shift+Delete")
 	} else if is_tag_view() {
 		add("すべて選択", .Select_All, "Ctrl+A")
-		add("タグを編集…", .Tag_Rename)
+		if !is_recent_view() do add("タグを編集…", .Tag_Rename)
 	} else if in_trash() {
 		add("すべて選択", .Select_All, "Ctrl+A")
 		add("ゴミ箱を空にする", .Empty_Trash, "", len(app.view) > 0)
@@ -965,6 +986,7 @@ open_menu :: proc(vi: int, main_menu: bool) {
 		sep()
 		add("端末で開く", .Terminal)
 		add("パスをコピー", .Copy_Path, "Shift+Ctrl+C")
+		add("フォルダーのサイズを計算", .Folder_Sizes)
 		add("並べ替え…", .Sort_Menu)
 		add("隠しファイルを隠す" if app.show_hidden else "隠しファイルを表示", .Hidden, "Ctrl+H")
 		add("ブックマークに追加", .Bookmark, "Ctrl+D")
@@ -1393,8 +1415,18 @@ draw_header :: proc(r: Rect) {
 	case app.edit_focus == .Path:
 		draw_edit(&app.path_edit, bar, true)
 	case app.searching:
-		draw_edit(&app.search, bar, app.edit_focus == .Search, I_SEARCH)
-		if clicked(bar) do app.edit_focus = .Search
+		// "中身" toggle at the end of the bar: also search inside files
+		tw := f32(text_width("中身", fs(12), true))
+		tog := Rect{bar.x + bar.w - tw - px(22), bar.y + px(5), tw + px(16), bar.h - px(10)}
+		draw_edit(&app.search, {bar.x, bar.y, bar.w - tog.w - px(8), bar.h}, app.edit_focus == .Search, I_SEARCH)
+		rrect(tog, tog.h / 2, ACCENT if content_search_on else hex(0xffffff, 22))
+		text(tog.x + px(8), baseline(tog, fs(12)), "中身", fs(12), hex(0x060913) if content_search_on else DIM, true)
+		if content_running() do progress_ring(shrink(tog, tog.h / 2 - px(3)), 2, false)
+		if clicked(tog) {
+			content_search_on = !content_search_on
+			app.walk_q = "\x00" // search again
+			refilter()
+		} else if clicked(bar) do app.edit_focus = .Search
 	case:
 		draw_pathbar(bar)
 	}
@@ -1409,7 +1441,7 @@ draw_pathbar :: proc(bar: Rect) {
 	}
 	segs := make([dynamic]Seg, context.temp_allocator)
 	if is_tag_view() {
-		append(&segs, Seg{location_name(), app.cwd, I_TAG})
+		append(&segs, Seg{location_name(), app.cwd, I_RECENT if is_recent_view() else I_TAG})
 	} else if in_trash() {
 		append(&segs, Seg{"ゴミ箱", app.trash_files, I_TRASH})
 	} else {
@@ -1616,8 +1648,11 @@ draw_body :: proc() {
 			}
 			sz := format_size(e.size)
 			if e.is_dir {
-				c := dir_count(full_path(e.name))
-				sz = "—" if c < 0 else fmt.tprintf("%d 個", c)
+				if n, ok := folder_size_of(full_path(e.name)); ok do sz = format_size(n)
+				else {
+					c := dir_count(full_path(e.name))
+					sz = "—" if c < 0 else fmt.tprintf("%d 個", c)
+				}
 			}
 			sx := r.x + r.w - date_w - px(16) - f32(text_width(sz, size))
 			text(sx, bl, sz, size, DIM)
@@ -1749,7 +1784,7 @@ draw_dialog :: proc(W, H: f32) {
 	draw_alpha = u32(p * 255)
 	defer draw_alpha = 255
 	w := min(px(400), W - px(32))
-	is_input := app.dialog == .Rename || app.dialog == .Mkdir || app.dialog == .Compress || app.dialog == .New_File || app.dialog == .Select_Pattern
+	is_input := app.dialog == .Rename || app.dialog == .Mkdir || app.dialog == .Compress || app.dialog == .New_File || app.dialog == .Select_Pattern || app.dialog == .Connect
 	h := px(196) if is_input else px(170)
 	r := Rect{(W - w) / 2, (H - h) / 2 + (1 - p) * px(24), w, h}
 	rrect(r, px(14), POP_BG)
@@ -1771,6 +1806,9 @@ draw_dialog :: proc(W, H: f32) {
 	case .Mkdir:
 		title, ok = "新しいフォルダー", "作成"
 		problem = name_problem(strings.trim_space(edit_str(&app.dlg_edit)))
+	case .Connect:
+		title, ok = "サーバーへ接続（SFTP）", "接続"
+		if !server_ok(strings.trim_space(edit_str(&app.dlg_edit))) do problem = "ユーザー@ホスト:/パス の形で入力してください"
 	case .New_File:
 		title, ok = "新しいファイル", "作成"
 		problem = name_problem(strings.trim_space(edit_str(&app.dlg_edit)))
@@ -2160,6 +2198,7 @@ main :: proc() {
 	build_places()
 	load_bookmarks()
 	load_tags()
+	load_servers()
 	append(&app.tabs, Tab{})
 
 	project_async = true
@@ -2202,6 +2241,11 @@ main :: proc() {
 		}
 		if rules_tick() do dirty = true
 		if project_tick() do dirty = true
+		if folder_sizes_poll() do dirty = true
+		if content_poll() {
+			refilter()
+			dirty = true
+		}
 		if git_poll() do dirty = true
 		if music_poll() do dirty = true
 		if app.walking {
@@ -2392,6 +2436,8 @@ draw_tabbar :: proc(r: Rect) {
 MAX_SEARCH_RESULTS :: 5000
 
 stop_walk :: proc() {
+	content_stop()
+	clear(&content_names)
 	virtual.arena_free_all(&app.search_arena)
 	clear(&app.tree_loaded) // its keys and the tree's child entries lived in that arena
 	app.walk_stack = {}
@@ -2434,7 +2480,7 @@ step_walk :: proc(budget_ms: i64 = 6) -> bool {
 			child, _ := filepath.join({rel, fi.name}, a)
 			is_dir := fi.type == .Directory
 			if is_dir do append(&app.walk_stack, child) // symlinks are not followed (no loops)
-			if strings.contains(strings.to_lower(fi.name, context.temp_allocator), app.walk_q) {
+			if strings.contains(strings.to_lower(fi.name, context.temp_allocator), app.walk_q) && child not_in content_names {
 				append(&app.entries, Entry {
 					name = child, size = fi.size, mtime = fi.modification_time._nsec / 1_000_000_000,
 					btime = fi.creation_time._nsec / 1_000_000_000, atime = fi.access_time._nsec / 1_000_000_000,

@@ -36,6 +36,8 @@ Preview :: struct {
 	img_w, img_h:  int,
 	text:          string,
 	lines:         [dynamic]string,
+	title:         string, // instead of the file name (comparisons)
+	diff:          bool, // color +/- lines
 	info:          string,
 	scroll:        f32,
 	big:           bool, // document-sized card
@@ -71,7 +73,8 @@ free_content :: proc() {
 	delete(pv.lines)
 	delete(pv.info)
 	delete(pv.vpath)
-	pv.img, pv.text, pv.lines, pv.info, pv.vpath = nil, "", {}, "", ""
+	delete(pv.title)
+	pv.img, pv.text, pv.lines, pv.info, pv.vpath, pv.title, pv.diff = nil, "", {}, "", "", "", false
 	pv.img_w, pv.img_h, pv.scroll, pv.pdf, pv.page, pv.pages, pv.page_w = 0, 0, 0, nil, 0, 0, 0
 	pv.mode, pv.big, pv.song, pv.zoom, pv.pan, pv.drag, pv.ended = .Icon, false, false, 1, {}, false, false
 }
@@ -510,7 +513,15 @@ draw_preview :: proc(W, H: f32) {
 		y := area.y + px(16) + f32(first) * lh - pv.scroll
 		for i in first ..< len(pv.lines) {
 			if y > area.y + area.h do break
-			text(area.x + px(16), y + lh * 0.75, pv.lines[i], size, FG)
+			col := FG
+			if pv.diff && len(pv.lines[i]) > 0 {
+				switch {
+				case strings.has_prefix(pv.lines[i], "@@"):                                        col = ACCENT
+				case pv.lines[i][0] == '+' && !strings.has_prefix(pv.lines[i], "+++"): col = hex(0xa6e3a1)
+				case pv.lines[i][0] == '-' && !strings.has_prefix(pv.lines[i], "---"): col = DANGER
+				}
+			}
+			text(area.x + px(16), y + lh * 0.75, pv.lines[i], size, col)
 			y += lh
 		}
 		reset_clip()
@@ -550,7 +561,7 @@ draw_preview :: proc(W, H: f32) {
 		}
 		iw := f32(text_width(info, fs(12)))
 		text(bx - iw - px(4), baseline(cr, fs(12)), info, fs(12), DIM)
-		text(cr.x, baseline(cr, size), ellipsize(filepath.base(e.name), size, bx - iw - px(16) - cr.x, true), size, FG, true)
+		text(cr.x, baseline(cr, size), ellipsize(pv.title if pv.title != "" else filepath.base(e.name), size, bx - iw - px(16) - cr.x, true), size, FG, true)
 	}
 	if app.pressed && !contains(r, app.mx, app.my) do preview_close()
 }
@@ -618,4 +629,12 @@ blit_scaled :: proc(r: Rect, img: []u32, iw, ih: int) {
 			row[x] = o
 		}
 	}
+}
+
+// Replaces the open viewer's content with text under a custom title (comparisons).
+preview_show_text :: proc(t, title: string, diff := false) {
+	free_content()
+	set_text(t)
+	pv.title = strings.clone(title)
+	pv.diff = diff
 }

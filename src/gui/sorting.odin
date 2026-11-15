@@ -334,6 +334,7 @@ folders_conf :: proc() -> string {
 apply_folder_prefs :: proc(path: string) {
 	pr, ok := folder_prefs[path]
 	if !ok do pr = default_pref
+	if !ok && path == RECENT do pr = {sort = .Accessed, desc = true, dirs = false} // most recently used first
 	app.sort, app.sort_desc, app.dirs_first, app.group = pr.sort, pr.desc, pr.dirs, pr.group
 }
 

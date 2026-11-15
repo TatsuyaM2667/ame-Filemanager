@@ -58,6 +58,13 @@ so it idles at **0% CPU and ~19 MB of RAM**.
   `*.jpg *.png`), paste a copied image or text as a new file, Tab completion in the path bar,
   item counts for folders in list view, free space of the current drive in the sidebar, mouse
   back / forward buttons.
+- **Recent files** in the sidebar (the freedesktop recently-used list GNOME / GTK apps keep).
+- **Search inside files**: turn on 中身 in the search bar to also list files whose text contains
+  the query (ripgrep, or grep), in the background.
+- **Folder sizes**: right-click → サイズを計算 (selected folders, or every folder shown).
+- **Compare two files**: select two → 比較 shows a colored unified diff (or where binaries differ).
+- **SFTP**: main menu → サーバーへ接続… mounts `user@host:/path` with sshfs (key login) and keeps
+  it in the sidebar.
 - **Open with**: right-click a folder or file → 開く… → アプリから開く… lists every installed app
   that declares the type (code editors, other file managers…) with its own icon.
 - **Language / framework badge on every folder**: whatever it holds the most code of right now

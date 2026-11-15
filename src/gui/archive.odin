@@ -20,6 +20,7 @@ SINGLE_EXTS :: [][2]string{{".gz", "gzip"}, {".z", "gzip"}, {".xz", "xz"}, {".lz
 
 Job_Kind :: enum {
 	Extract, Decompress, Compress, Convert, Mount, Thumb,
+	Net_Mount,
 }
 
 Job :: struct {
@@ -161,6 +162,8 @@ reap_jobs :: proc() -> bool {
 			case .Decompress:
 				if ok do toastf("「%s」を展開しました", j.label)
 				else do toastf("「%s」を展開できませんでした", j.label)
+			case .Net_Mount:
+				net_mount_done(j, ok)
 			case .Mount:
 				if !ok do toastf("「%s」を%sできませんでした", j.label, "取り出し" if j.dest == "eject" else "マウント")
 				else if j.dest == "eject" do toastf("「%s」を取り外せます", j.label)

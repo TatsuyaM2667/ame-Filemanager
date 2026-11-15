@@ -27,6 +27,9 @@ act_icon :: proc(a: Act) -> rune {
 	case .Copy_Path:       return 0xf0c1 // link
 	case .Sort_Menu:       return I_SORT_MENU
 	case .Open_Menu:       return 0xf07c // folder-open
+	case .Folder_Sizes:    return 0xf1c0 // database (disk usage)
+	case .Compare:         return 0xf0db // columns
+	case .Connect:         return 0xf0c2 // cloud
 	case .Open_With_Menu, .Open_With: return 0xf135 // rocket
 	case .Sort_Dir:        return 0xf160 if !app.sort_desc else 0xf161
 	case .Dirs_First:      return 0xf07b

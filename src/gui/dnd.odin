@@ -164,7 +164,7 @@ set_hot :: proc(key: string) -> (changed: bool) {
 // t: eased highlight (0..1); spring: hover countdown before the folder opens (-1: none).
 drop_hover :: proc(r: Rect, kind: Drop_Kind, path: string, name: string, rad: f32, tag: u8 = 0) -> (on: bool, t: f32, spring: f32) {
 	spring = -1
-	if !app.dnd_on || dd.kind != .None || dd.invalid || !contains(r, app.dnd_x, app.dnd_y) do return
+	if kind == .None || !app.dnd_on || dd.kind != .None || dd.invalid || !contains(r, app.dnd_x, app.dnd_y) do return
 	changed := set_hot(fmt.tprintf("%v|%d|%s", kind, tag, path))
 	if kind == .Dir && !dir_ok(path) {
 		dd.invalid = true

@@ -4,6 +4,7 @@ import "core:os"
 import "core:sys/posix"
 import "core:strings"
 import "core:testing"
+import "core:path/filepath"
 import "core:log"
 import "core:slice"
 import "core:math"
@@ -408,4 +409,87 @@ test_hardening :: proc(t: ^testing.T) {
 	testing.expect_value(t, img[0], u32(0))
 	img = svg_rasterize(`<svg viewBox="0 0 10 10"><path d="M0 0L1e30 1e30L0 5z M nan"/><rect width="1e39" height="5"/></svg>`, 16, context.temp_allocator)
 	_ = img
+}
+
+@(test)
+test_content_search :: proc(t: ^testing.T) {
+	dir := "/tmp/ame-fm-test-content"
+	_ = os.remove_all(dir)
+	defer _ = os.remove_all(dir)
+	_ = os.make_directory_all("/tmp/ame-fm-test-content/notes")
+	_ = os.write_entire_file_from_string("/tmp/ame-fm-test-content/notes/todo.txt", "buy MILK tomorrow")
+	_ = os.write_entire_file_from_string("/tmp/ame-fm-test-content/other.txt", "nothing here")
+	_ = os.write_entire_file("/tmp/ame-fm-test-content/blob.bin", []u8{0, 1, 2, 'm', 'i', 'l', 'k', 0})
+	saved_cwd, saved_entries, saved_base, saved_search := app.cwd, app.entries, app.base_count, app.searching
+	defer app.cwd, app.entries, app.base_count, app.searching = saved_cwd, saved_entries, saved_base, saved_search
+	app.cwd = dir
+	app.entries = make([dynamic]Entry, context.temp_allocator)
+	app.base_count = 0
+	app.searching = true
+	content_search_on = true
+	defer content_search_on = false
+	content_start("milk")
+	start := time.tick_now()
+	for !content_poll() && time.duration_seconds(time.tick_since(start)) < 10 do time.sleep(10 * time.Millisecond)
+	names := make([dynamic]string, context.temp_allocator)
+	for e in app.entries do append(&names, e.name)
+	testing.expect_value(t, len(names), 1) // text files only: the binary doesn't count
+	if len(names) == 1 do testing.expect_value(t, names[0], "notes/todo.txt") // name doesn't match, content does (case-insensitive)
+	content_stop()
+	clear(&content_names)
+}
+
+@(test)
+test_folder_sizes :: proc(t: ^testing.T) {
+	dir := "/tmp/ame-fm-test-sizes"
+	_ = os.remove_all(dir)
+	defer _ = os.remove_all(dir)
+	_ = os.make_directory_all("/tmp/ame-fm-test-sizes/big/deep")
+	_ = os.write_entire_file_from_string("/tmp/ame-fm-test-sizes/big/a.bin", strings.repeat("x", 3000, context.temp_allocator))
+	_ = os.write_entire_file_from_string("/tmp/ame-fm-test-sizes/big/deep/b.bin", strings.repeat("y", 500, context.temp_allocator))
+	saved_cwd, saved_entries, saved_view := app.cwd, app.entries, app.view
+	defer app.cwd, app.entries, app.view = saved_cwd, saved_entries, saved_view
+	app.cwd = dir
+	app.entries = make([dynamic]Entry, context.temp_allocator)
+	app.view = make([dynamic]int, context.temp_allocator)
+	append(&app.entries, Entry{name = "big", is_dir = true})
+	append(&app.view, 0)
+	folder_sizes_start()
+	start := time.tick_now()
+	for !folder_sizes_poll() && time.duration_seconds(time.tick_since(start)) < 5 do time.sleep(5 * time.Millisecond)
+	n, ok := folder_size_of("/tmp/ame-fm-test-sizes/big")
+	testing.expect(t, ok)
+	testing.expect(t, n >= 3500) // both files (directories add their own sizes on some filesystems)
+	folder_sizes_clear()
+}
+
+@(test)
+test_net_recent_compare :: proc(t: ^testing.T) {
+	// SFTP addresses: nothing ssh could read as an option or a shell as syntax
+	testing.expect(t, server_ok("tatsuya@nas.local:/srv/share"))
+	testing.expect(t, server_ok("nas:"))
+	testing.expect(t, !server_ok("-oProxyCommand=sh:/x"))
+	testing.expect(t, !server_ok("user@-oProxyCommand=x:/"))
+	testing.expect(t, !server_ok("host:/a b"))
+	testing.expect(t, !server_ok("host:/$(id)"))
+	testing.expect(t, !server_ok("noport"))
+	testing.expect(t, !strings.contains(filepath.base(server_mountpoint("u@h:/a/b")), "/"))
+
+	// recently-used.xbel
+	items := recent_items(`<xbel><bookmark href="file:///home/u/%E3%83%80%E3%82%A6%E3%83%B3/a%20b.zip" added="x" modified="2026-10-29T19:01:14.854888Z" visited="y"><info/></bookmark><bookmark href="https://example.com/" modified="2026-10-29T19:01:14Z"></bookmark></xbel>`)
+	testing.expect_value(t, len(items), 1) // web pages are skipped
+	if len(items) == 1 {
+		testing.expect_value(t, items[0].path, "/home/u/ダウン/a b.zip")
+		testing.expect_value(t, items[0].used, i64(1793300474))
+	}
+
+	// byte comparison
+	_ = os.write_entire_file_from_string("/tmp/ame-fm-cmp-a", "hello world")
+	_ = os.write_entire_file_from_string("/tmp/ame-fm-cmp-b", "hello wOrld")
+	_ = os.write_entire_file_from_string("/tmp/ame-fm-cmp-c", "hello world")
+	defer {_ = os.remove("/tmp/ame-fm-cmp-a"); _ = os.remove("/tmp/ame-fm-cmp-b"); _ = os.remove("/tmp/ame-fm-cmp-c")}
+	same, first, ok := files_equal("/tmp/ame-fm-cmp-a", "/tmp/ame-fm-cmp-b")
+	testing.expect(t, ok && !same && first == 7)
+	same, _, ok = files_equal("/tmp/ame-fm-cmp-a", "/tmp/ame-fm-cmp-c")
+	testing.expect(t, ok && same)
 }

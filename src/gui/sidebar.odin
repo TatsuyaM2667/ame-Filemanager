@@ -209,7 +209,7 @@ draw_sidebar :: proc(w, H: f32) {
 	y := hh + px(6)
 	nav :: proc(r: Rect, path, label: string, kind := Drop_Kind.Dir) {
 		if b := bounce_of(path); b > 0 do rrect(r, px(6), with_alpha(ACCENT, u8(min(b * 900, 120))))
-		if _, _, spring := drop_hover(r, kind, path, label, px(6)); spring > 0 {
+		if _, _, spring := drop_hover(r, kind, path, label, px(6)); kind != .None && spring > 0 {
 			progress_ring({r.x + r.w - px(22), r.y + r.h / 2 - px(5), px(10), px(10)}, spring, false)
 		}
 		if clicked(r) do push(.Navigate, 0, path)
@@ -224,6 +224,7 @@ draw_sidebar :: proc(w, H: f32) {
 	for p in app.places {
 		if p.icon == I_TRASH || p.icon == I_DRIVE do continue
 		nav(side_row(&y, w, p.icon, p.label, app.cwd == p.path), p.path, p.label)
+		if p.icon == I_HOME do nav(side_row(&y, w, I_RECENT, "最近使用したファイル", is_recent_view()), RECENT, "", .None)
 	}
 	if len(bookmarks) > 0 {
 		side_section(&y, w, "ブックマーク")
@@ -246,6 +247,7 @@ draw_sidebar :: proc(w, H: f32) {
 		if clicked(er) do eject_device(d)
 		else do nav(r, d.path, d.label)
 	}
+	draw_sidebar_servers(&y, w)
 	draw_sidebar_tags(&y, w)
 	reset_clip()
 	draw_free_space(w, H)

@@ -187,7 +187,8 @@ tags_moved :: proc(old, new: string) {
 // Tag view: "tag:<id>" as the current location lists tagged items from anywhere.
 // Entry names are absolute paths without the leading "/" so nested-name handling applies.
 
-is_tag_view :: proc() -> bool {return strings.has_prefix(app.cwd, "tag:")}
+// A virtual folder of absolute paths (a tag, or recent files): no new files, no pasting into it.
+is_tag_view :: proc() -> bool {return strings.has_prefix(app.cwd, "tag:") || app.cwd == RECENT}
 
 load_tag_view :: proc(path: string) -> bool {
 	id, ok := strconv.parse_uint(path[4:])
