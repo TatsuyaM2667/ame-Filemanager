@@ -2132,6 +2132,7 @@ dump_frame :: proc(path: string) {
 }
 
 main :: proc() {
+	if len(os.args) >= 2 && os.args[1] == "--render" do os.exit(render_helper_main(os.args[2:])) // document renderer (viewer.odin)
 	opacity := 0.7
 	if s := os.get_env("GF_OPACITY", context.temp_allocator); s != "" {
 		if v, ok := strconv.parse_f64(s); ok do opacity = clamp(v, 0, 1)

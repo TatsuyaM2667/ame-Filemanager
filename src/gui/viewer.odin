@@ -3,10 +3,15 @@ package main
 // Content loaders for the viewer (Space / double-click), so every file shows something:
 //   PDF  → poppler-glib + cairo, loaded at runtime (dlopen): no hard dependency
 //   SVG  → librsvg (same), fonts → FreeType sample sheet (font.odin)
+//   PDF and SVG are parsed in a separate helper process (`ame-filemanager --render …`,
+//   with memory / CPU limits and a timeout): a malicious or broken document can crash or
+//   hang only the helper, never the file manager.
 //   Word / Writer / PowerPoint / Excel / EPUB → their text, pulled out of the zip with bsdtar
 //   archives → bsdtar listing, folders → their contents, anything else → hex dump
 
 import "core:c"
+import "core:strconv"
+import "core:sys/posix"
 import "core:dynlib"
 import "core:fmt"
 import "core:os"
@@ -120,7 +125,8 @@ with_surface :: proc(w, h: int, white: bool, draw: proc(cr: rawptr, data: rawptr
 // ---------------------------------------------------------------------------
 // PDF
 
-pdf_open :: proc(path: string) -> (doc: rawptr, pages: int) {
+@(private = "file")
+_pdf_open :: proc(path: string) -> (doc: rawptr, pages: int) {
 	load_libs()
 	if !L.pdf_ok do return nil, 0
 	uri := strings.clone_to_cstring(file_uri(path), context.temp_allocator)
@@ -129,12 +135,9 @@ pdf_open :: proc(path: string) -> (doc: rawptr, pages: int) {
 	return doc, int(L.doc_n_pages(doc))
 }
 
-pdf_close :: proc(doc: rawptr) {
-	if doc != nil do L.g_object_unref(doc)
-}
-
 // Renders page `index` at `width` pixels wide.
-pdf_render :: proc(doc: rawptr, index, width: int) -> (img: []u32, w, h: int) {
+@(private = "file")
+_pdf_render :: proc(doc: rawptr, index, width: int) -> (img: []u32, w, h: int) {
 	page := L.doc_page(doc, c.int(index))
 	if page == nil do return
 	defer L.g_object_unref(page)
@@ -156,7 +159,8 @@ pdf_render :: proc(doc: rawptr, index, width: int) -> (img: []u32, w, h: int) {
 // ---------------------------------------------------------------------------
 // SVG
 
-svg_render_file :: proc(path: string, max_side: int) -> (img: []u32, w, h: int) {
+@(private = "file")
+_svg_render :: proc(path: string, max_side: int) -> (img: []u32, w, h: int) {
 	load_libs()
 	if !L.svg_ok do return
 	handle := L.svg_new(strings.clone_to_cstring(path, context.temp_allocator), nil)
@@ -173,6 +177,127 @@ svg_render_file :: proc(path: string, max_side: int) -> (img: []u32, w, h: int) 
 		L.svg_render(x.handle, cr, &x.vp, nil)
 	}, &ctx)
 	return
+}
+
+// ---------------------------------------------------------------------------
+// The helper process (runs before any window or font is opened)
+
+// `ame-filemanager --render pdf-info PATH` → "AMEPDF <pages>\n"
+// `ame-filemanager --render pdf PATH PAGE WIDTH` / `--render svg PATH MAX` → "AMEIMG <w> <h>\n" + w*h ARGB words
+render_helper_main :: proc(args: []string) -> int {
+	// a hostile document gets 1.5 GB and 20 s of CPU, then the kernel stops it
+	lim := posix.rlimit{rlim_cur = 1536 << 20, rlim_max = 1536 << 20}
+	posix.setrlimit(.AS, &lim)
+	cpu := posix.rlimit{rlim_cur = 20, rlim_max = 20}
+	posix.setrlimit(.CPU, &cpu)
+	num :: proc(s: string) -> int {v, _ := strconv.parse_int(s); return v}
+	img: []u32
+	w, h: int
+	switch {
+	case len(args) == 2 && args[0] == "pdf-info":
+		_, pages := _pdf_open(args[1])
+		fmt.printf("AMEPDF %d\n", pages)
+		return 0 if pages > 0 else 1
+	case len(args) == 4 && args[0] == "pdf":
+		doc, pages := _pdf_open(args[1])
+		page := num(args[2])
+		if doc == nil || page < 0 || page >= pages do return 1
+		img, w, h = _pdf_render(doc, page, clamp(num(args[3]), 16, 8192))
+	case len(args) == 3 && args[0] == "svg":
+		img, w, h = _svg_render(args[1], clamp(num(args[2]), 16, 8192))
+	case:
+		return 2
+	}
+	if img == nil do return 1
+	header := fmt.tprintf("AMEIMG %d %d\n", w, h)
+	if _, err := os.write(os.stdout, transmute([]u8)header); err != nil do return 1
+	if _, err := os.write(os.stdout, slice.to_bytes(img)); err != nil do return 1
+	return 0
+}
+
+// Runs the helper and collects its stdout (10 s, 512 MB at most); ok=false if it failed.
+@(private = "file")
+run_helper :: proc(args: ..string) -> (data: []u8, ok: bool) {
+	exe, eerr := os.get_executable_path(context.temp_allocator)
+	if eerr != nil do return
+	r, w, perr := os.pipe()
+	if perr != nil do return
+	cmd := make([dynamic]string, context.temp_allocator)
+	append(&cmd, exe, "--render")
+	append(&cmd, ..args)
+	p, serr := os.process_start({command = cmd[:], stdout = w})
+	os.close(w)
+	defer os.close(r)
+	if serr != nil do return
+	fd := posix.FD(os.fd(r))
+	buf := make([dynamic]u8, context.temp_allocator)
+	chunk: [65536]u8
+	deadline := ticks_ms() + 10_000
+	failed := false
+	for {
+		left := deadline - ticks_ms()
+		pfd := posix.pollfd{fd = fd, events = {.IN}}
+		if left <= 0 || posix.poll(&pfd, 1, c.int(left)) <= 0 {failed = true; break} // hung
+		n := posix.read(fd, &chunk[0], len(chunk))
+		if n <= 0 do break
+		append(&buf, ..chunk[:n])
+		if len(buf) > 512 << 20 {failed = true; break}
+	}
+	if failed do _ = os.process_kill(p)
+	state, _ := os.process_wait(p)
+	if failed || !state.exited || state.exit_code != 0 do return
+	return buf[:], true
+}
+
+@(private = "file")
+helper_image :: proc(args: ..string) -> (img: []u32, w, h: int) {
+	data, ok := run_helper(..args)
+	if !ok do return
+	nl := strings.index_byte(string(data), '\n')
+	if nl < 0 do return
+	f := strings.fields(string(data[:nl]), context.temp_allocator)
+	if len(f) != 3 || f[0] != "AMEIMG" do return
+	iw, _ := strconv.parse_int(f[1])
+	ih, _ := strconv.parse_int(f[2])
+	px := data[nl + 1:]
+	if iw <= 0 || ih <= 0 || iw > 8192 || ih > 65536 || len(px) != iw * ih * 4 do return // trust nothing it says
+	img = make([]u32, iw * ih)
+	copy(slice.to_bytes(img), px)
+	return img, iw, ih
+}
+
+// The viewer's handle for an open PDF: just its path (each page is rendered by a helper).
+@(private = "file")
+Pdf_Doc :: struct {
+	path: string,
+}
+
+pdf_open :: proc(path: string) -> (doc: rawptr, pages: int) {
+	data, ok := run_helper("pdf-info", path)
+	if !ok do return nil, 0
+	f := strings.fields(string(data), context.temp_allocator)
+	if len(f) != 2 || f[0] != "AMEPDF" do return nil, 0
+	n, _ := strconv.parse_int(f[1])
+	if n <= 0 do return nil, 0
+	d := new(Pdf_Doc)
+	d.path = strings.clone(path)
+	return d, n
+}
+
+pdf_close :: proc(doc: rawptr) {
+	if doc == nil do return
+	d := (^Pdf_Doc)(doc)
+	delete(d.path)
+	free(d)
+}
+
+pdf_render :: proc(doc: rawptr, index, width: int) -> (img: []u32, w, h: int) {
+	if doc == nil do return
+	return helper_image("pdf", (^Pdf_Doc)(doc).path, fmt.tprint(index), fmt.tprint(width))
+}
+
+svg_render_file :: proc(path: string, max_side: int) -> (img: []u32, w, h: int) {
+	return helper_image("svg", path, fmt.tprint(max_side))
 }
 
 // ---------------------------------------------------------------------------
