@@ -43,9 +43,11 @@ so it idles at **0% CPU and ~19 MB of RAM**.
   art show it as their icon.
 - **Viewer for every file**: images (zoom / pan), PDF (pages), video, SVG, text and code, Office /
   EPUB text, archive listings, font samples, and a hex dump for everything else.
-- **Sorting & grouping**: 8 keys (name, modified, created, accessed, size, type, extension, tag),
+- **Sorting, grouping & filtering**: 9 keys (name, modified, created, accessed, size, type, extension,
+  tag, language — a folder's language / framework badge or a file's logo),
   ascending / descending, folders first, and groups with headers (type, date, size, extension, tag,
-  first letter). Each folder remembers its own order.
+  first letter, language), and 言語で絞り込み… to show only one language / framework. Each folder
+  remembers its own order.
 - **Language & framework icons**: source files show their language logo (Python, Rust, TypeScript,
   Go, Odin, …) and PDFs the Acrobat logo; project folders get a badge for the framework found in
   their manifest — React, Next.js, Vue, Svelte, Angular, Yew, Leptos, Dioxus, Tauri, Django,

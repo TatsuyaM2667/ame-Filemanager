@@ -566,3 +566,36 @@ project_chip :: proc(x, cy: f32, dir: string) {
 	draw_icon({r.x + px(4), r.y, px(14), h}, l.icon, px(12))
 	text(r.x + px(6) + gw, baseline(r, size), l.label, size, hex(icon_color(l.icon)), true)
 }
+
+// ---------------------------------------------------------------------------
+// "Language" as a property of any entry, for sorting, grouping and filtering:
+// a folder's badge (framework / main language), a file's logo (language, or formats
+// like Markdown, JSON, Docker, PDF).
+
+@(private = "file")
+FORMAT_NAMES := map[string]string {
+	"markdown" = "Markdown", "json" = "JSON", "yaml" = "YAML", "toml" = "TOML", "xml" = "XML",
+	"docker" = "Docker", "git" = "Git", "gnu" = "Make", "cmake" = "CMake", "acrobat" = "PDF",
+	"sql" = "SQL", "gradle" = "Gradle", "terraform" = "Terraform", "dotnet" = ".NET",
+	"nextdotjs" = "Next.js", "nuxt" = "Nuxt", "vite" = "Vite", "tailwindcss" = "Tailwind",
+	"nodedotjs" = "Node.js", "angular" = "Angular", "django" = "Django", "laravel" = "Laravel",
+	"flutter" = "Flutter", "tauri" = "Tauri", "yew" = "Yew", "dioxus" = "Dioxus", "deno" = "Deno",
+	"remix" = "Remix",
+}
+
+// Display name of a Lang (file entries only carry the icon).
+lang_label :: proc(l: Lang) -> string {
+	if l.label != "" do return l.label
+	if n, ok := LANGUAGE_NAMES[l.icon]; ok do return n
+	if n, ok := FORMAT_NAMES[l.icon]; ok do return n
+	return l.icon
+}
+
+// The language / framework of an entry ("" when it has none, or a folder still being looked at).
+entry_lang :: proc(e: ^Entry) -> (l: Lang, label: string) {
+	ok: bool
+	if e.is_dir do l, ok = project_of(full_path(e.name))
+	else do l, ok = lang_of(e.name)
+	if !ok do return {}, ""
+	return l, lang_label(l)
+}

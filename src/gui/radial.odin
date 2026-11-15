@@ -30,6 +30,7 @@ act_icon :: proc(a: Act) -> rune {
 	case .Folder_Sizes:    return 0xf1c0 // database (disk usage)
 	case .Compare:         return 0xf0db // columns
 	case .Connect:         return 0xf0c2 // cloud
+	case .Lang_Filter_Menu, .Lang_Filter: return 0xf0b0 // filter
 	case .Open_With_Menu, .Open_With: return 0xf135 // rocket
 	case .Sort_Dir:        return 0xf160 if !app.sort_desc else 0xf161
 	case .Dirs_First:      return 0xf07b
@@ -173,7 +174,11 @@ draw_menu :: proc() {
 		fg := mix(FG if it.ok else with_alpha(FG, 80), hex(0x060913), g)
 		lr := (r0 + ro) / 2
 		lx, ly := cx + math.cos(mid) * lr, cy + math.sin(mid) * lr
-		if !draw_app_icon(it.image, lx, ly - px(10), px(24 + 3 * g)) {
+		if it.logo != "" {
+			s := px(22 + 3 * g)
+			rrect({lx - s / 2 - px(3), ly - px(10) - s / 2 - px(3), s + px(6), s + px(6)}, px(6), hex(0xffffff, 235))
+			draw_icon({lx - s / 2, ly - px(10) - s / 2, s, s}, it.logo, s)
+		} else if !draw_app_icon(it.image, lx, ly - px(10), px(24 + 3 * g)) {
 			glyph_center({lx - px(14), ly - px(22), px(28), px(24)}, act_icon(it.act), fs(15 + 2 * g), fg)
 		}
 		arc := (lr * step) * 0.86

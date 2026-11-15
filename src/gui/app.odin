@@ -82,6 +82,7 @@ Act :: enum {
 	Tag_Pick, Tag_New, Tag_Rename, Tag_Delete, View_Tree, Tree_Toggle, Play_Entry, Play_Dir, Copy_Path,
 	Sort_Menu, Sort_By, Sort_Dir, Dirs_First, Group_Menu, Group_By, New_File, Select_Pattern,
 	Open_Menu, Open_With_Menu, Open_With, Folder_Sizes, Compare, Connect,
+	Lang_Filter_Menu, Lang_Filter,
 }
 
 Pending :: struct {
@@ -100,7 +101,7 @@ Focus :: enum {
 }
 
 Sort_Key :: enum {
-	Name, Modified, Created, Accessed, Size, Type, Ext, Tag,
+	Name, Modified, Created, Accessed, Size, Type, Ext, Tag, Lang,
 }
 
 Edit :: struct {
@@ -119,6 +120,7 @@ Menu_Item :: struct {
 	has_arg: bool,
 	on:      bool, // current choice: drawn highlighted
 	image:   string, // SVG icon path (apps in "open with"), instead of the action's glyph
+	logo:    string, // a bundled logo (assets/icons) instead of the glyph (language filter)
 }
 
 Tab :: struct {
@@ -181,6 +183,7 @@ App :: struct {
 	now, dt, last_t:   f32,
 	animating:         bool, // something is still moving: keep drawing frames
 	text_cursor:       bool, // pointer is over a text field this frame
+	lang_filter:       string, // show only entries of this language / framework ("" = all)
 	menu_t0, dlg_t0:   f32,
 	toast_t0:          f32,
 	prev_dialog:       Dialog,
@@ -370,6 +373,10 @@ refilter :: proc() {
 		if i >= app.base_count && q == "" do break
 		if !app.show_hidden && e.hidden do continue
 		if q != "" && !e.content_hit && !strings.contains(strings.to_lower(filepath.base(e.name), context.temp_allocator), q) do continue
+		if app.lang_filter != "" {
+			_, label := entry_lang(&app.entries[i])
+			if label != app.lang_filter do continue
+		}
 		append(&app.view, i)
 	}
 	prepare_sort()
@@ -412,6 +419,7 @@ go_to :: proc(path: string, mode := Nav.Push, select_name := "") -> bool {
 		app.nav_dir = -1 if mode == .Back else 1
 		app.focus, app.anchor = -1, -1
 		app.searching = false
+		app.lang_filter = "" // a filter belongs to the folder it was chosen in
 		if app.edit_focus == .Search || app.edit_focus == .Path do app.edit_focus = .None
 	}
 	refilter()
@@ -821,6 +829,8 @@ run_pending :: proc() {
 		case .Open_With:  launch_app(p.i)
 		case .Folder_Sizes: folder_sizes_start()
 		case .Compare:      compare_selected()
+		case .Lang_Filter_Menu: open_lang_filter_menu()
+		case .Lang_Filter:  set_lang_filter(p.i)
 		case .Connect:      begin_connect()
 		case .Group_Menu: open_group_menu()
 		case .Sort_By:
@@ -1699,6 +1709,22 @@ draw_body :: proc() {
 	}
 	set_clip(b)
 	body_drop(b)
+	if app.lang_filter != "" { // "Odin のみ ×": what is hidden, and how to show it again
+		label := strings.concatenate({app.lang_filter, " のみ"}, context.temp_allocator)
+		tw := f32(text_width(label, fs(12), true))
+		pill := Rect{b.x + px(12), b.y + b.h - px(42), tw + px(52), px(30)}
+		rrect({pill.x, pill.y + px(2), pill.w, pill.h}, pill.h / 2, hex(0x000000, 60))
+		rrect(pill, pill.h / 2, POP_BG)
+		rrect(pill, pill.h / 2, with_alpha(ACCENT, 160), px(1))
+		glyph_center({pill.x + px(4), pill.y, px(22), pill.h}, 0xf0b0, fs(11), ACCENT) // filter
+		text(pill.x + px(26), baseline(pill, fs(12)), label, fs(12), FG, true)
+		glyph_center({pill.x + pill.w - px(24), pill.y, px(20), pill.h}, I_CLOSE, fs(10), DIM)
+		if clicked(pill) {
+			app.lang_filter = ""
+			refilter()
+		}
+		if hovering(pill) && app.pressed do hit_item = true // not a background click
+	}
 
 	if app.band_on && band.w > 0 && band.h > 0 {
 		br := Rect{bx + band.x, by + band.y, band.w, band.h}
@@ -2240,7 +2266,11 @@ main :: proc() {
 			dirty = true
 		}
 		if rules_tick() do dirty = true
-		if project_tick() do dirty = true
+		if project_tick() {
+			dirty = true
+			// folders' languages arrive from the worker: re-sort / re-filter by them
+			if app.sort == .Lang || app.group == .Lang || app.lang_filter != "" do refilter()
+		}
 		if folder_sizes_poll() do dirty = true
 		if content_poll() {
 			refilter()

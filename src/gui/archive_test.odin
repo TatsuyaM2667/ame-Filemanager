@@ -493,3 +493,50 @@ test_net_recent_compare :: proc(t: ^testing.T) {
 	same, _, ok = files_equal("/tmp/ame-fm-cmp-a", "/tmp/ame-fm-cmp-c")
 	testing.expect(t, ok && same)
 }
+
+@(test)
+test_lang_sort_filter :: proc(t: ^testing.T) {
+	dir := "/tmp/ame-fm-test-langsort"
+	_ = os.remove_all(dir)
+	defer _ = os.remove_all(dir)
+	defer projects_clear()
+	_ = os.make_directory_all("/tmp/ame-fm-test-langsort/proj")
+	_ = os.write_entire_file_from_string("/tmp/ame-fm-test-langsort/proj/main.odin", "package main")
+	saved := app
+	defer app = saved
+	app.cwd = dir
+	app.entries = make([dynamic]Entry, context.temp_allocator)
+	app.view = make([dynamic]int, context.temp_allocator)
+	app.groups, app.lay, app.hdrs = {}, {}, {}
+	app.searching, app.tree, app.lang_filter = false, false, ""
+	append(&app.entries,
+		Entry{name = "notes.txt"},
+		Entry{name = "app.py"},
+		Entry{name = "proj", is_dir = true},
+		Entry{name = "build.zig"},
+		Entry{name = "readme.md"},
+	)
+	app.base_count = len(app.entries)
+	_, label := entry_lang(&app.entries[2])
+	testing.expect_value(t, label, "Odin") // a folder: its badge
+	_, label = entry_lang(&app.entries[4])
+	testing.expect_value(t, label, "Markdown") // a format counts too
+
+	app.sort, app.sort_desc, app.dirs_first, app.group = .Lang, false, false, .None
+	refilter()
+	order := make([dynamic]string, context.temp_allocator)
+	for vi in app.view do append(&order, app.entries[vi].name)
+	testing.expect_value(t, len(order), 5)
+	if len(order) == 5 {
+		testing.expect_value(t, order[0], "readme.md") // Markdown < Odin < Python < Zig
+		testing.expect_value(t, order[1], "proj")
+		testing.expect_value(t, order[3], "build.zig")
+		testing.expect_value(t, order[4], "notes.txt") // no language: last
+	}
+	app.group = .Lang
+	testing.expect_value(t, group_label(&app.entries[0]), "言語なし")
+	app.group = .None
+	app.lang_filter = "Python"
+	refilter()
+	testing.expect_value(t, len(app.view), 1)
+}

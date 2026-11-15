@@ -8,12 +8,13 @@ import "core:c/libc"
 import "core:fmt"
 import "core:os"
 import "core:path/filepath"
+import "core:slice"
 import "core:strings"
 import "core:unicode"
 import "core:unicode/utf8"
 
 Group_By :: enum {
-	None, Type, Date, Size, Ext, Tag, Initial,
+	None, Type, Date, Size, Ext, Tag, Initial, Lang,
 }
 
 SORT_NAMES := [Sort_Key]string {
@@ -25,6 +26,7 @@ SORT_NAMES := [Sort_Key]string {
 	.Type     = "種類",
 	.Ext      = "拡張子",
 	.Tag      = "タグ",
+	.Lang     = "言語",
 }
 
 GROUP_NAMES := [Group_By]string {
@@ -35,6 +37,7 @@ GROUP_NAMES := [Group_By]string {
 	.Ext     = "拡張子",
 	.Tag     = "タグ",
 	.Initial = "頭文字",
+	.Lang    = "言語",
 }
 
 KIND_NAMES := [Kind]string {
@@ -124,6 +127,9 @@ group_key :: proc(e: ^Entry) -> (rank: int, sub: string) {
 	case .Initial:
 		ini := initial(e)
 		return 0 if ini == "0–9" else (2 if ini == "記号" else 1), ini
+	case .Lang:
+		_, label := entry_lang(e)
+		return 1 if label == "" else 0, label // groups by name, "言語なし" last
 	}
 	return 0, ""
 }
@@ -138,6 +144,7 @@ group_label :: proc(e: ^Entry) -> string {
 	case .Ext:     return "フォルダー" if rank == 0 else (strings.to_upper(sub, context.temp_allocator) if rank == 1 else "拡張子なし")
 	case .Tag:     return tag_list[rank].name if rank < len(tag_list) else "タグなし"
 	case .Initial: return sub
+	case .Lang:    return sub if rank == 0 else "言語なし"
 	}
 	return ""
 }
@@ -170,6 +177,15 @@ entry_less :: proc(x, y: int) -> bool {
 	case .Tag:
 		ta, tb := first_tag(a), first_tag(b)
 		cmp = -1 if ta < tb else (1 if ta > tb else 0)
+	case .Lang: // by language name; entries without one go last either way
+		_, la := entry_lang(a)
+		_, lb := entry_lang(b)
+		switch {
+		case la == lb:
+		case la == "": return false
+		case lb == "": return true
+		case:          cmp = -1 if natural_less(la, lb) else 1
+		}
 	}
 	if cmp == 0 {
 		if natural_less(a.name, b.name) do cmp = -1
@@ -378,6 +394,7 @@ open_sort_menu :: proc() {
 	append(&app.menu_items, Menu_Item{label = "降順" if app.sort_desc else "昇順", act = .Sort_Dir, on = app.sort_desc, ok = true})
 	append(&app.menu_items, Menu_Item{label = "フォルダー優先", act = .Dirs_First, on = app.dirs_first, ok = true})
 	append(&app.menu_items, Menu_Item{label = "グループ…", act = .Group_Menu, on = app.group != .None, ok = true}) // labels must outlive the frame: literals only
+	append(&app.menu_items, Menu_Item{label = "言語で絞り込み…", act = .Lang_Filter_Menu, on = app.lang_filter != "", ok = true})
 	app.menu_open, app.menu_main = true, false
 	app.prev_menu = false
 }
@@ -389,4 +406,54 @@ open_group_menu :: proc() {
 	}
 	app.menu_open, app.menu_main = true, false
 	app.prev_menu = false
+}
+
+// ---------------------------------------------------------------------------
+// Filter by language / framework
+
+@(private = "file") filter_choices: [dynamic]string // the menu's languages (labels must outlive frames)
+@(private = "file") filter_counts: [dynamic]string
+
+// Radial menu of the languages present here, most common first (with their logos).
+open_lang_filter_menu :: proc() {
+	for s in filter_counts do delete(s)
+	clear(&filter_counts)
+	clear(&filter_choices) // labels themselves are static strings
+	counts := make(map[string]int, 16, context.temp_allocator)
+	icons := make(map[string]string, 16, context.temp_allocator)
+	for &e in app.entries[:app.base_count] {
+		if !app.show_hidden && e.hidden do continue
+		l, label := entry_lang(&e)
+		if label == "" do continue
+		counts[label] += 1
+		icons[label] = l.icon
+	}
+	for label in counts do append(&filter_choices, label)
+	count_lookup = counts
+	slice.sort_by(filter_choices[:], proc(a, b: string) -> bool {
+		ca, cb := count_lookup[a], count_lookup[b]
+		return ca > cb if ca != cb else a < b
+	})
+	count_lookup = nil
+	clear(&app.menu_items)
+	if app.lang_filter != "" do append(&app.menu_items, Menu_Item{label = "すべて表示", act = .Lang_Filter, arg = -1, has_arg = true, ok = true})
+	for label, i in filter_choices {
+		if i >= 15 do break // a radial menu can't hold more
+		append(&filter_counts, fmt.aprintf("%d 個", counts[label]))
+		append(&app.menu_items, Menu_Item{label = label, act = .Lang_Filter, arg = i, has_arg = true, on = app.lang_filter == label, ok = true, key = filter_counts[len(filter_counts) - 1], logo = icons[label]})
+	}
+	if len(app.menu_items) == 0 {
+		toastf("このフォルダーには言語のわかるファイルがありません（フォルダーは調べ終わると出ます）")
+		return
+	}
+	app.menu_open, app.menu_main = true, false
+	app.prev_menu = false
+}
+
+@(private = "file") count_lookup: map[string]int // for the sort below (no closures in Odin)
+
+set_lang_filter :: proc(i: int) {
+	app.lang_filter = filter_choices[i] if i >= 0 && i < len(filter_choices) else ""
+	refilter()
+	if app.lang_filter != "" do toastf("%s だけを表示しています（%d 個）", app.lang_filter, len(app.view))
 }
