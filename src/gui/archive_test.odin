@@ -540,3 +540,30 @@ test_lang_sort_filter :: proc(t: ^testing.T) {
 	refilter()
 	testing.expect_value(t, len(app.view), 1)
 }
+
+@(test)
+test_pinned_folders :: proc(t: ^testing.T) {
+	saved := app
+	defer app = saved
+	app.cwd = "/home/u"
+	app.places = make([dynamic]Place, context.temp_allocator)
+	append(&app.places, Place{"ホーム", I_HOME, "/home/u"}, Place{"ドキュメント", I_DOCS, "/home/u/Documents"}, Place{"ダウンロード", I_DOWNLOAD, "/home/u/Downloads"})
+	app.entries = make([dynamic]Entry, context.temp_allocator)
+	app.view = make([dynamic]int, context.temp_allocator)
+	app.groups, app.lay, app.hdrs = {}, {}, {}
+	app.searching, app.tree, app.lang_filter, app.group = false, false, "", .None
+	append(&app.entries,
+		Entry{name = "aaa", is_dir = true, mtime = 50},
+		Entry{name = "Downloads", is_dir = true, mtime = 10},
+		Entry{name = "zzz.txt", mtime = 99},
+		Entry{name = "Documents", is_dir = true, mtime = 1},
+	)
+	app.base_count = len(app.entries)
+	for desc in ([]bool{false, true}) {
+		app.sort, app.sort_desc, app.dirs_first = .Modified, desc, false
+		refilter()
+		testing.expect_value(t, app.entries[app.view[0]].name, "Documents") // sidebar order, either direction
+		testing.expect_value(t, app.entries[app.view[1]].name, "Downloads")
+	}
+	testing.expect_value(t, app.entries[app.view[2]].name, "zzz.txt") // the rest by the sort (newest first)
+}

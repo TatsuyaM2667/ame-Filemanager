@@ -151,7 +151,18 @@ group_label :: proc(e: ^Entry) -> string {
 
 grouping :: proc() -> bool {return app.group != .None && !tree_mode()}
 
-// Sort order: group, then folders first (if on), then the key, then the name.
+// Index of the standard (XDG) folder this entry is in the sidebar's list, or -1.
+pinned_rank :: proc(e: ^Entry) -> int {
+	if !e.is_dir do return -1
+	p := full_path(e.name)
+	for pl, i in app.places {
+		if pl.icon == I_HOME || pl.icon == I_TRASH || pl.icon == I_DRIVE do continue
+		if pl.path == p do return i
+	}
+	return -1
+}
+
+// Sort order: group, then the standard folders, then folders first (if on), then the key, then the name.
 entry_less :: proc(x, y: int) -> bool {
 	a, b := &app.entries[x], &app.entries[y]
 	if grouping() {
@@ -159,6 +170,12 @@ entry_less :: proc(x, y: int) -> bool {
 		rb, sb := group_key(b)
 		if ra != rb do return ra < rb
 		if sa != sb do return natural_less(sa, sb)
+	}
+	// Desktop, Documents, Downloads…: always first, in the sidebar's order, whatever the sort
+	if pa, pb := pinned_rank(a), pinned_rank(b); pa != pb {
+		if pa < 0 do return false
+		if pb < 0 do return true
+		return pa < pb
 	}
 	if app.dirs_first && a.is_dir != b.is_dir do return a.is_dir
 	cmp := 0
