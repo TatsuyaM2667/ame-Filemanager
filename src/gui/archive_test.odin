@@ -587,4 +587,5 @@ test_config_and_tmp_safety :: proc(t: ^testing.T) {
 	testing.expect(t, strings.has_prefix(dir, "/tmp/ame-fm-") && dir != "/tmp")
 	fi, err := os.stat(dir, context.temp_allocator)
 	testing.expect(t, err == nil && fi.mode == {.Read_User, .Write_User, .Execute_User}) // 0700
+	_ = os.remove_all(dir)
 }

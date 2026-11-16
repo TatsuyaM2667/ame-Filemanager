@@ -58,6 +58,8 @@ archive_kind :: proc(name: string) -> (stem: string, tool: string, ok: bool) {
 	return "", "", false
 }
 
+spawned: [dynamic]posix.pid_t // children of spawn(), reaped by reap_jobs
+
 // Starts a process; returns its pid (0 on failure). The pidfd is closed: we reap with waitpid.
 spawn :: proc(cmd: []string, dir := "", stderr_path := "") -> posix.pid_t {
 	desc := os.Process_Desc{command = cmd, working_dir = dir}
@@ -69,6 +71,7 @@ spawn :: proc(cmd: []string, dir := "", stderr_path := "") -> posix.pid_t {
 	}
 	p, err := os.process_start(desc)
 	if err != nil do return 0
+	append(&spawned, posix.pid_t(p.pid))
 	when ODIN_OS == .Linux { // os.process_start opened a pidfd
 		if p.handle != 0 && p.handle != ~uintptr(0) do posix.close(posix.FD(p.handle))
 	}
@@ -143,12 +146,16 @@ flatten :: proc(dest: string) {
 }
 
 // Reaps finished children (jobs and fire-and-forget apps). Returns true if a job finished.
+// Only the processes spawn() started: waitpid(-1) would also take children that worker
+// threads wait for themselves (git status, ffprobe, ripgrep), making those fail at random.
 reap_jobs :: proc() -> bool {
 	done := false
-	for {
+	for k := len(spawned) - 1; k >= 0; k -= 1 {
 		status: c.int
-		pid := posix.waitpid(-1, &status, {.NOHANG})
-		if pid <= 0 do break
+		pid := posix.waitpid(spawned[k], &status, {.NOHANG})
+		if pid == 0 do continue // still running
+		unordered_remove(&spawned, k)
+		if pid < 0 do continue // already reaped by whoever waited for it (viewer audio, video)
 		if music_child_exited(pid) do continue
 		for j, i in jobs {
 			if j.pid != pid do continue
