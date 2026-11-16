@@ -4,7 +4,7 @@
 
 A translucent, GNOME Files–style file manager written in pure **Odin**, with Filee-style
 drag-to-convert built in. It talks to Wayland directly — no GTK, no SDL, no GPU context —
-so it idles at **0% CPU and ~19 MB of RAM**.
+so it idles at **0% CPU and about 20–35 MB of RAM** (most of it is the window's own pixels).
 
 ## Features
 
@@ -53,6 +53,8 @@ so it idles at **0% CPU and ~19 MB of RAM**.
   their manifest — React, Next.js, Vue, Svelte, Angular, Yew, Leptos, Dioxus, Tauri, Django,
   Flutter, Rails, Laravel and more. About 80 real logos (mostly [Simple Icons](https://simpleicons.org),
   see `assets/icons/SOURCES.md`) are compiled in and drawn by a small SVG rasterizer written in Odin.
+- **Standard folders first**: Desktop, Documents, Downloads, Music, Pictures and Videos stay at the
+  top in any sort order, in the sidebar's order.
 - **Tags like iPad**: create named tags with colors; a tagged folder takes the tag's color.
 - **Tree view** (Ctrl+3), Obsidian-style, as an alternative to icons and list.
 - **Copy Path** (right-click, or Shift+Ctrl+C) and copy / paste of text in the path bar.
@@ -144,15 +146,40 @@ Background opacity: `GF_OPACITY=0.85 ame-filemanager` (default 0.7).
 | Ctrl+H                     | Show hidden files                           |
 | Ctrl+A, F5, Ctrl+Q         | Select all, Reload, Quit                    |
 
+## Security
+
+A file manager opens files that came from elsewhere every day, so:
+
+- **No code runs because you opened a folder**: Git status is skipped for repositories whose own
+  config sets `core.fsmonitor` or `filter.*` commands (a downloaded repo could otherwise run
+  commands through `git status`).
+- **Documents are parsed in a separate process**: PDF and SVG go through
+  `ame-filemanager --render …` with memory / CPU limits and a 10 s timeout; only the finished
+  pixels come back, so a malicious or broken file can't crash or take over the file manager.
+- **Copies never pretend**: a failed read or write fails the copy (and a move then keeps its
+  source); moves fall back to copy + delete only across filesystems.
+- **No shells**: external tools get argument lists, never shell strings; field codes in `Exec=`
+  aren't expanded inside quotes; SFTP hosts and package names that could be read as options are
+  refused.
+- **Uninstalling** shows the exact command first and runs it in a terminal through doas / sudo /
+  pkexec; the kernel, libc, init, the package manager and similar packages have no remove button.
+- **Private scratch files** (`XDG_RUNTIME_DIR` or a 0700 `mkdtemp` directory, never guessable
+  names in `/tmp`), and settings written atomically (temp file + rename).
+
 ## Layout
 
 ```
 src/core/    Odin core: file operations, trash (also built as a C-ABI library for the CLI)
 src/gui/     Odin GUI: Wayland client (wl.odin), renderer (draw.odin), fonts (font.odin),
-             app (app.odin), conversion (convert.odin), preview / viewer, archives,
-             music, sorting (sorting.odin), drag & drop (dnd.odin), icons (lang.odin)
+             SVG rasterizer (svg.odin), app (app.odin), conversion (convert.odin),
+             preview / viewer (+ the --render helper), archives, music, sorting (sorting.odin),
+             drag & drop (dnd.odin), language / framework icons (lang.odin), open with
+             (apps.odin), content search (content.odin), SFTP (net.odin), storage page
+             (storage.odin, sunburst.odin), packages (pkgs.odin), smaller extras (features.odin)
+assets/icons ~80 logo SVGs compiled into the binary (sources and licenses: SOURCES.md)
 src/cli/     gf-cli, a small Zig 0.13 command-line tool on top of the core (optional)
-tests/       Odin trash tests; ./test.sh runs everything
+tests/       Odin core tests (trash, copy / move errors); GUI tests live next to the code
+             (src/gui/archive_test.odin); ./test.sh runs everything
 ```
 
 ## License

@@ -4,7 +4,7 @@
 
 **Odin** だけで書いた、GNOME Files 風の半透明ファイルマネージャーです。Filee のような
 「ドラッグで変換」を標準で内蔵しています。Wayland と直接やり取りするので GTK も SDL も GPU も使わず、
-待機中は **CPU 0%・メモリ約 19MB** です。
+待機中は **CPU 0%・メモリ約 20〜35MB**（大半はウィンドウの絵そのもの）です。
 
 ## 機能
 
@@ -49,6 +49,8 @@
   （React・Next.js・Vue・Svelte・Angular・Yew・Leptos・Dioxus・Tauri・Django・Flutter・Rails・Laravel など）。
   本物のロゴ約 80 個（主に [Simple Icons](https://simpleicons.org)、出典は `assets/icons/SOURCES.md`）を
   アプリに埋め込み、Odin で書いた小さな SVG 描画エンジンで描いています。
+- **標準フォルダーは常に先頭**: デスクトップ・ドキュメント・ダウンロード・ミュージック・ピクチャ・ビデオは、
+  どの並べ方でもサイドバーと同じ順で先頭に並びます。
 - **iPad のようなタグ**: 名前と色を自由に作れます。タグを付けたフォルダーはその色になります。
 - **ツリー表示**（Ctrl+3）: Obsidian 風。アイコン表示・一覧表示と切り替え。
 - **パスをコピー**（右クリック、または Shift+Ctrl+C）。パスバーの文字もコピー＆ペーストできます。
@@ -133,14 +135,37 @@ libwayland、libxkbcommon、FreeType、bsdtar。フォントは Adwaita Sans・N
 | Ctrl+H | 隠しファイルの表示 |
 | Ctrl+A、F5、Ctrl+Q | すべて選択、再読み込み、終了 |
 
+## 安全性
+
+ファイルマネージャーは「よそから来たファイル」を毎日開くアプリなので、次のようにしています。
+
+- **フォルダーを開いただけでコードが動かない**: リポジトリ自身の設定に `core.fsmonitor` や `filter.*` のコマンドが
+  書かれている場合は git を実行しません（ダウンロードしたリポジトリが `git status` 経由でコマンドを実行できるため）。
+- **文書は別プロセスで解析**: PDF・SVG は `ame-filemanager --render …` という別プロセス（メモリ・CPU 上限、10 秒で打ち切り）
+  で開き、できあがった画像だけを受け取ります。細工されたファイルでも本体は落ちず、乗っ取られません。
+- **コピーは失敗をごまかさない**: 読み書きに失敗したらコピーは失敗扱い（移動なら元のファイルは残す）。
+  コピー＋削除に切り替えるのは別ドライブへの移動だけです。
+- **シェルを通さない**: 外部コマンドは引数のリストで渡し、シェル文字列は使いません。`Exec=` のクォート内の
+  `%f` は展開せず、オプションと誤解されうる SFTP のホスト名やパッケージ名は受け付けません。
+- **アンインストール**は、実行するコマンドを先に見せ、端末で doas / sudo / pkexec を通して実行します。
+  カーネル・libc・init・パッケージマネージャーなどには削除ボタンを出しません。
+- **一時ファイルは自分専用の場所に**（`XDG_RUNTIME_DIR` か 0700 の `mkdtemp` フォルダー。`/tmp` の推測できる名前は使わない）。
+  設定ファイルは一時ファイルに書いてから置き換えます（途中で落ちても壊れない）。
+
 ## 構成
 
 ```
 src/core/    Odin のコア: ファイル操作・ゴミ箱（CLI 用に C ABI のライブラリとしてもビルド）
 src/gui/     Odin の GUI: Wayland クライアント (wl.odin)、描画 (draw.odin)、フォント (font.odin)、
-             本体 (app.odin)、変換 (convert.odin)、プレビュー、圧縮ファイル
+             SVG 描画 (svg.odin)、本体 (app.odin)、変換 (convert.odin)、プレビュー・ビューアー
+             （--render の別プロセスを含む）、圧縮ファイル、音楽、並べ替え (sorting.odin)、
+             ドラッグ＆ドロップ (dnd.odin)、言語・フレームワークのアイコン (lang.odin)、
+             アプリから開く (apps.odin)、中身検索 (content.odin)、SFTP (net.odin)、
+             ストレージ (storage.odin・sunburst.odin)、パッケージ (pkgs.odin)、小さな便利機能 (features.odin)
+assets/icons 実行ファイルに埋め込むロゴの SVG 約 80 個（出典とライセンス: SOURCES.md）
 src/cli/     gf-cli: コアを使う小さな Zig 0.13 製コマンド（任意）
-tests/       Odin のゴミ箱テスト。./test.sh で全テストを実行
+tests/       コアのテスト（ゴミ箱、コピー・移動のエラー）。GUI のテストはコードの隣
+             (src/gui/archive_test.odin)。./test.sh で全テストを実行
 ```
 
 ## ライセンス
