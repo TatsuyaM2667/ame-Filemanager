@@ -13,9 +13,20 @@ case "$(uname -s)" in
 FreeBSD) LINK='-extra-linker-flags:-L/usr/local/lib' ;; # ports install libs under /usr/local
 esac
 
+if ! command -v odin >/dev/null 2>&1; then
+    echo "error: odin not found. Get a recent build (dev-2026-08 or newer) from https://github.com/odin-lang/Odin/releases and put it on PATH." >&2
+    exit 1
+fi
+
 mkdir -p zig-out/bin
 # GUI: pure Odin (Wayland + FreeType + xkbcommon)
-odin build src/gui -out:zig-out/bin/ame-filemanager -o:speed $LINK
+if ! odin build src/gui -out:zig-out/bin/ame-filemanager -o:speed $LINK; then
+    echo "" >&2
+    echo "Build failed. Usual causes:" >&2
+    echo "  - Odin too old ($(odin version 2>/dev/null)); dev-2026-08 or newer is needed" >&2
+    echo "  - missing development packages for wayland, libxkbcommon or freetype (see README: Install)" >&2
+    exit 1
+fi
 
 # CLI (optional): written for Zig 0.13 exactly
 ZIG="${ZIG:-zig}"
@@ -37,7 +48,9 @@ install -m 644 assets/ame-filemanager.svg "$PREFIX/share/icons/hicolor/scalable/
 command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -q -t "$PREFIX/share/icons/hicolor" 2>/dev/null || true
 install -m 755 zig-out/bin/ame-filemanager "$PREFIX/bin/ame-filemanager"
 [ -f zig-out/bin/gf-cli ] && install -m 755 zig-out/bin/gf-cli "$PREFIX/bin/gf-cli"
-install -m 644 ame-filemanager.desktop "$PREFIX/share/applications/ame-filemanager.desktop"
+# absolute Exec: ~/.local/bin is not on every desktop session's PATH (Debian, some display managers)
+sed "s|^Exec=ame-filemanager|Exec=$PREFIX/bin/ame-filemanager|" ame-filemanager.desktop > "$PREFIX/share/applications/ame-filemanager.desktop"
+chmod 644 "$PREFIX/share/applications/ame-filemanager.desktop"
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$PREFIX/share/applications" || true
 
 if [ -z "$NO_DEFAULT" ]; then

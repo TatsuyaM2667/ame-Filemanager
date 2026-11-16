@@ -101,6 +101,16 @@ UI_FONTS :: []string {
 	"/usr/local/share/fonts/adwaita/AdwaitaSans-Regular.ttf",
 	"/usr/local/share/fonts/noto/NotoSans-Regular.ttf",
 	"/usr/local/share/fonts/dejavu/DejaVuSans.ttf",
+	// Debian / Ubuntu
+	"/usr/share/fonts/opentype/cantarell/Cantarell-VF.otf",
+	"/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+	"/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+	// Fedora
+	"/usr/share/fonts/google-noto/NotoSans-Regular.ttf",
+	"/usr/share/fonts/google-noto-vf/NotoSans[wght].ttf",
+	"/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
+	// openSUSE
+	"/usr/share/fonts/truetype/DejaVuSans.ttf",
 }
 CJK_FONTS :: []string {
 	"/usr/share/fonts/noto/NotoSansCJKjp-Regular.otf",
@@ -109,6 +119,11 @@ CJK_FONTS :: []string {
 	"/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
 	"/usr/local/share/fonts/noto/NotoSansCJK-Regular.ttc",
 	"/usr/local/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+	"/usr/share/fonts/google-noto-sans-cjk-vf-fonts/NotoSansCJK-VF.ttc", // Fedora
+	"/usr/share/fonts/google-noto-sans-cjk-fonts/NotoSansCJK-Regular.ttc",
+	"/usr/share/fonts/truetype/fonts-japanese-gothic.ttf", // Debian / Ubuntu: whatever Japanese font is installed
+	"/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf",
+	"/usr/share/fonts/truetype/vlgothic/VL-Gothic-Regular.ttf",
 }
 CJK_BOLD_FONTS :: []string {
 	"/usr/share/fonts/noto/NotoSansCJKjp-Bold.otf",
@@ -121,6 +136,16 @@ ICON_FONTS :: []string {
 	"/usr/share/fonts/nerd-fonts/SymbolsNerdFont-Regular.ttf",
 	"/usr/share/fonts/TTF/SymbolsNerdFontMono-Regular.ttf",
 	"/usr/local/share/fonts/nerd-fonts-symbols/SymbolsNerdFont-Regular.ttf",
+	"/usr/share/fonts/truetype/nerd-fonts/SymbolsNerdFont-Regular.ttf",
+	"/usr/share/fonts/truetype/SymbolsNerdFont-Regular.ttf",
+}
+
+// Where people put a downloaded Symbols Nerd Font when their distribution has no package.
+USER_ICON_FONTS :: []string {
+	".local/share/fonts/SymbolsNerdFont-Regular.ttf",
+	".local/share/fonts/NerdFontsSymbolsOnly/SymbolsNerdFont-Regular.ttf",
+	".local/share/fonts/NerdFonts/SymbolsNerdFont-Regular.ttf",
+	".fonts/SymbolsNerdFont-Regular.ttf",
 }
 
 @(private = "file")
@@ -138,6 +163,13 @@ font_init :: proc() -> bool {
 	chain[0] = {open_first(UI_FONTS), open_first(CJK_FONTS), open_first(ICON_FONTS)}
 	if chain[0][0] == nil do chain[0][0] = fc_match("sans-serif")
 	if chain[0][1] == nil do chain[0][1] = fc_match("sans-serif:lang=ja")
+	if chain[0][2] == nil {
+		home := os.get_env("HOME", context.temp_allocator)
+		for rel in USER_ICON_FONTS {
+			p := strings.concatenate({home, "/", rel}, context.temp_allocator)
+			if chain[0][2] = open_first({p}); chain[0][2] != nil do break
+		}
+	}
 	if chain[0][2] == nil do chain[0][2] = fc_match("Symbols Nerd Font")
 	bold_ui := open_first(UI_FONTS)
 	if bold_ui != nil {

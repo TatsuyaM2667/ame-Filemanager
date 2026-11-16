@@ -79,11 +79,23 @@ cd ame-Filemanager
 NO_DEFAULT=1 ./install.sh   # 既定のファイルマネージャーは変えない
 ```
 
-| システム | 手順 |
+| システム | パッケージ（入れたら `./install.sh`） |
 | --- | --- |
-| Chimera Linux | Odin は odin-lang.org から入れて、`apk add wayland-devel libxkbcommon-devel freetype-devel libarchive-progs ffmpeg` → `./install.sh` |
-| Arch Linux | `cd packaging/arch && makepkg -si` |
-| FreeBSD | `pkg install odin wayland libxkbcommon freetype2 libarchive xdg-utils ffmpeg` → `./install.sh` |
+| Chimera Linux | `apk add wayland-devel libxkbcommon-devel freetype-devel libarchive-progs ffmpeg` |
+| Arch Linux | `cd packaging/arch && makepkg -si` (or `pacman -S odin wayland libxkbcommon freetype2 libarchive ffmpeg xdg-utils noto-fonts-cjk ttf-nerd-fonts-symbols`) |
+| Debian / Ubuntu | `apt install libwayland-dev libxkbcommon-dev libfreetype-dev libarchive-tools ffmpeg xdg-utils fonts-noto-cjk` |
+| Fedora | `dnf install wayland-devel libxkbcommon-devel freetype-devel bsdtar ffmpeg-free xdg-utils google-noto-sans-cjk-fonts` |
+| openSUSE | `zypper install wayland-devel libxkbcommon-devel freetype2-devel bsdtar ffmpeg xdg-utils noto-sans-cjk-fonts` |
+| Void Linux | `xbps-install wayland-devel libxkbcommon-devel freetype-devel bsdtar ffmpeg xdg-utils noto-fonts-cjk` |
+| Alpine Linux | `apk add wayland-dev libxkbcommon-dev freetype-dev libarchive-tools ffmpeg xdg-utils font-noto-cjk` |
+| Gentoo | `emerge dev-libs/wayland x11-libs/libxkbcommon media-libs/freetype app-arch/libarchive media-video/ffmpeg x11-misc/xdg-utils media-fonts/noto-cjk` |
+| FreeBSD | `pkg install odin wayland libxkbcommon freetype2 libarchive xdg-utils ffmpeg` |
+
+Odin はほとんどのディストリビューションにパッケージが無いので、<https://github.com/odin-lang/Odin/releases>
+から新しいもの（dev-2026-08 以降）を入れて `odin` を PATH に置いてください。Symbols Nerd Font のパッケージが無い場合は、
+<https://github.com/ryanoasis/nerd-fonts/releases> の `NerdFontsSymbolsOnly.zip` を `~/.local/share/fonts/` に展開します。
+開発と動作確認は Chimera Linux で行っています（他の行は同等のパッケージ名です）。Wayland のセッションが必要です
+（GNOME・KDE Plasma・Sway・Hyprland・river など）。
 
 必要なもの: xdg-shell 対応の Wayland コンポジター、新しい Odin（dev-2026-08 以降）、
 libwayland、libxkbcommon、FreeType、bsdtar。フォントは Adwaita Sans・Noto Sans CJK・Symbols Nerd Font

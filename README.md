@@ -88,11 +88,23 @@ cd ame-Filemanager
 NO_DEFAULT=1 ./install.sh   # keep your current default file manager
 ```
 
-| System        | Steps                                                                                                                                    |
-| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| Chimera Linux | install Odin from odin-lang.org, then `apk add wayland-devel libxkbcommon-devel freetype-devel libarchive-progs ffmpeg` → `./install.sh` |
-| Arch Linux    | `cd packaging/arch && makepkg -si`                                                                                                       |
-| FreeBSD       | `pkg install odin wayland libxkbcommon freetype2 libarchive xdg-utils ffmpeg` → `./install.sh`                                           |
+| System          | Packages, then `./install.sh`                                                                                                                             |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Chimera Linux   | `apk add wayland-devel libxkbcommon-devel freetype-devel libarchive-progs ffmpeg`                                                                         |
+| Arch Linux      | `cd packaging/arch && makepkg -si` (or `pacman -S odin wayland libxkbcommon freetype2 libarchive ffmpeg xdg-utils noto-fonts-cjk ttf-nerd-fonts-symbols`) |
+| Debian / Ubuntu | `apt install libwayland-dev libxkbcommon-dev libfreetype-dev libarchive-tools ffmpeg xdg-utils fonts-noto-cjk`                                            |
+| Fedora          | `dnf install wayland-devel libxkbcommon-devel freetype-devel bsdtar ffmpeg-free xdg-utils google-noto-sans-cjk-fonts`                                     |
+| openSUSE        | `zypper install wayland-devel libxkbcommon-devel freetype2-devel bsdtar ffmpeg xdg-utils noto-sans-cjk-fonts`                                             |
+| Void Linux      | `xbps-install wayland-devel libxkbcommon-devel freetype-devel bsdtar ffmpeg xdg-utils noto-fonts-cjk`                                                     |
+| Alpine Linux    | `apk add wayland-dev libxkbcommon-dev freetype-dev libarchive-tools ffmpeg xdg-utils font-noto-cjk`                                                       |
+| Gentoo          | `emerge dev-libs/wayland x11-libs/libxkbcommon media-libs/freetype app-arch/libarchive media-video/ffmpeg x11-misc/xdg-utils media-fonts/noto-cjk`        |
+| FreeBSD         | `pkg install odin wayland libxkbcommon freetype2 libarchive xdg-utils ffmpeg`                                                                             |
+
+Odin is not packaged by most distributions: take a release (dev-2026-08 or newer) from
+<https://github.com/odin-lang/Odin/releases> and put `odin` on your PATH. Where there is no Symbols
+Nerd Font package, unzip `NerdFontsSymbolsOnly.zip` from <https://github.com/ryanoasis/nerd-fonts/releases>
+into `~/.local/share/fonts/`. Developed and tested on Chimera Linux; the other rows list the
+equivalent packages. A Wayland session is required (GNOME, KDE Plasma, Sway, Hyprland, river, …).
 
 Requirements: a Wayland compositor with xdg-shell, a recent Odin (dev-2026-08 or newer),
 libwayland, libxkbcommon, FreeType, bsdtar. Fonts: Adwaita Sans, Noto Sans CJK, Symbols Nerd Font
