@@ -60,8 +60,9 @@ so it idles at **0% CPU and ~19 MB of RAM**.
   `*.jpg *.png`), paste a copied image or text as a new file, Tab completion in the path bar,
   item counts for folders in list view, free space of the current drive in the sidebar, mouse
   back / forward buttons.
-- **Storage** (sidebar → ストレージ): every disk's used / free space, what the home folder's
-  items take (computed in the background, click to open), and the installed applications by
+- **Storage** (sidebar → ストレージ): every disk's used / free space, a Filelight-style sunburst of
+  the home folder (rings = levels, angle = size; hover for sizes, click to dive in, center to go
+  up; measured in the background), and the installed applications by
   size — apk, pacman, apt, dnf / zypper, xbps, FreeBSD pkg and Flatpak. アンインストール removes one
   completely (unneeded dependencies and settings too: `apk del`, `pacman -Rns`, `apt-get purge
   --autoremove`, `flatpak uninstall --delete-data`…) after a confirmation that shows the exact

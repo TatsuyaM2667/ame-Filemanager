@@ -632,3 +632,29 @@ test_packages :: proc(t: ^testing.T) {
 		for p in pk.list do if p.name == "linux-lts" || p.name == "apk-tools" || p.name == "musl" do testing.expect(t, p.protected)
 	}
 }
+
+@(test)
+test_sunburst_scan :: proc(t: ^testing.T) {
+	dir := "/tmp/ame-fm-test-sun"
+	_ = os.remove_all(dir)
+	defer _ = os.remove_all(dir)
+	defer sunburst_close()
+	_ = os.make_directory_all("/tmp/ame-fm-test-sun/big/deeper/deepest")
+	_ = os.make_directory_all("/tmp/ame-fm-test-sun/small")
+	_ = os.write_entire_file_from_string("/tmp/ame-fm-test-sun/big/deeper/deepest/a.bin", strings.repeat("x", 90_000, context.temp_allocator))
+	_ = os.write_entire_file_from_string("/tmp/ame-fm-test-sun/big/b.bin", strings.repeat("x", 10_000, context.temp_allocator))
+	_ = os.write_entire_file_from_string("/tmp/ame-fm-test-sun/small/c.txt", "tiny")
+	_ = os.write_entire_file_from_string("/tmp/ame-fm-test-sun/top.txt", strings.repeat("y", 5_000, context.temp_allocator))
+	sunburst_set_root(dir)
+	start := time.tick_now()
+	for sunburst_running() && time.duration_seconds(time.tick_since(start)) < 10 do time.sleep(5 * time.Millisecond)
+	top, total, size := sunburst_snapshot()
+	testing.expect_value(t, total, 3)
+	testing.expect_value(t, size, i64(105_004))
+	testing.expect_value(t, top[0].name, "big") // biggest first
+	testing.expect_value(t, top[0].size, i64(100_000))
+	testing.expect(t, len(top[0].kids) == 2 && top[0].kids[0].name == "deeper") // the hierarchy is kept
+	testing.expect_value(t, top[0].kids[0].kids[0].kids[0].name, "a.bin")
+	// "small" (4 bytes of 105,004) is below 0.25 % — still counted in the total, just no node of its own children
+	testing.expect_value(t, top[2].size, i64(4))
+}

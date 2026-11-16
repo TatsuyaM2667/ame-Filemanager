@@ -8,13 +8,9 @@ package main
 
 import "core:fmt"
 import "core:os"
-import "core:path/filepath"
-import "core:slice"
 import "core:strings"
 import "core:sync"
 import "core:sys/posix"
-import "core:thread"
-import gf "../core"
 
 STORAGE :: "storage:"
 I_STORAGE :: 0xf200 // pie chart
@@ -27,23 +23,9 @@ Disk :: struct {
 	free, total: u64,
 }
 
-@(private = "file")
-Item :: struct {
-	name:   string,
-	size:   i64,
-	is_dir: bool,
-}
-
 @(private = "file") st: struct {
 	disks:      [dynamic]Disk,
 	disks_at:   i64,
-	// home breakdown (worker)
-	lock:       sync.Mutex,
-	items:      [dynamic]Item, // done so far, owned
-	total:      int, // how many there are to measure
-	prog:       gf.Progress,
-	th:         ^thread.Thread,
-	running:    bool, // atomic
 	// page
 	scroll:     f32,
 	all_pkgs:   bool, // also packages installed only as dependencies
@@ -53,12 +35,12 @@ Item :: struct {
 storage_open :: proc() {
 	st.scroll = 0
 	st.disks_at = 0
-	home_breakdown_start()
+	sunburst_set_root(app.home)
 	packages_rescan()
 }
 
 storage_close :: proc() {
-	home_breakdown_stop()
+	sunburst_close()
 }
 
 // ---------------------------------------------------------------------------
@@ -98,54 +80,7 @@ refresh_disks :: proc() {
 }
 
 // ---------------------------------------------------------------------------
-// Home breakdown (worker thread)
-
-@(private = "file")
-home_worker :: proc() {
-	infos, err := os.read_all_directory_by_path(app.home, context.temp_allocator)
-	if err == nil {
-		sync.mutex_lock(&st.lock)
-		st.total = len(infos)
-		sync.mutex_unlock(&st.lock)
-		for fi in infos {
-			if sync.atomic_load(&st.prog.cancel) do break
-			n := gf.tree_size(fi.fullpath, &st.prog) if fi.type == .Directory else fi.size
-			sync.mutex_lock(&st.lock)
-			append(&st.items, Item{strings.clone(fi.name), n, fi.type == .Directory})
-			sync.mutex_unlock(&st.lock)
-			wake()
-		}
-	}
-	free_all(context.temp_allocator)
-	sync.atomic_store(&st.running, false)
-	wake()
-}
-
-@(private = "file")
-home_breakdown_start :: proc() {
-	home_breakdown_stop()
-	sync.atomic_store(&st.prog.cancel, false)
-	sync.atomic_store(&st.running, true)
-	st.th = thread.create_and_start(home_worker)
-}
-
-@(private = "file")
-home_breakdown_stop :: proc() {
-	if st.th != nil {
-		sync.atomic_store(&st.prog.cancel, true)
-		thread.join(st.th)
-		thread.destroy(st.th)
-		st.th = nil
-	}
-	for it in st.items do delete(it.name)
-	clear(&st.items)
-	st.total = 0
-}
-
-// ---------------------------------------------------------------------------
 // Drawing
-
-@(private = "file") CHART_COLORS := [?]u32{0x89b4fa, 0xa6e3a1, 0xf9e2af, 0xfab387, 0xf38ba8, 0xcba6f7, 0x94e2d5, 0x74c7ec, 0xf5c2e7, 0xb4befe}
 
 @(private = "file")
 section :: proc(x, y: f32, title, note: string) -> f32 {
@@ -187,50 +122,9 @@ draw_storage :: proc(b: Rect) {
 	}
 	y += f32((len(st.disks) + cols - 1) / cols) * px(86) + px(12)
 
-	// --- home breakdown
-	sync.mutex_lock(&st.lock)
-	items := slice.clone(st.items[:], context.temp_allocator)
-	total_n := st.total
-	sync.mutex_unlock(&st.lock)
-	slice.sort_by(items, proc(a, b: Item) -> bool {return a.size > b.size})
-	sum: i64
-	for it in items do sum += it.size
-	note := fmt.tprintf("合計 %s", format_size(sum))
-	if sync.atomic_load(&st.running) do note = fmt.tprintf("計算中… %d / %d（%s）", len(items), total_n, format_size(sum))
-	y = section(x, y, "ホームの内訳", note)
-	if sum > 0 {
-		// one stacked bar, then the biggest items as rows
-		bar := Rect{x, y, w, px(18)}
-		rrect(bar, px(9), hex(0xffffff, 18))
-		bx := bar.x
-		for it, i in items {
-			if i >= len(CHART_COLORS) do break
-			sw := bar.w * f32(f64(it.size) / f64(sum))
-			if sw >= 1 do fill({bx, bar.y, sw, bar.h}, hex(CHART_COLORS[i]))
-			bx += sw
-		}
-		rrect(bar, px(9), hex(0xffffff, 30), px(1))
-		y += px(30)
-		top := items[0].size
-		for it, i in items {
-			if i >= 12 do break
-			row := Rect{x, y, w, px(30)}
-			if hovering(row) && it.is_dir do rrect(row, px(6), HOVER)
-			glyph_center({row.x, row.y, px(24), row.h}, 0xf07b if it.is_dir else 0xf15b, fs(12), hex(CHART_COLORS[i % len(CHART_COLORS)]))
-			text(row.x + px(30), baseline(row, fs(13)), ellipsize(it.name, fs(13), px(200)), fs(13), FG)
-			track := Rect{row.x + px(240), row.y + px(11), row.w - px(240) - px(150), px(8)}
-			rrect(track, px(4), hex(0xffffff, 14))
-			rrect({track.x, track.y, max(track.h, track.w * f32(f64(it.size) / f64(max(top, 1)))), track.h}, px(4), hex(CHART_COLORS[i % len(CHART_COLORS)]))
-			sz := fmt.tprintf("%s  %d%%", format_size(it.size), int(f64(it.size) * 100 / f64(sum) + 0.5))
-			text(row.x + row.w - f32(text_width(sz, fs(12))), baseline(row, fs(12)), sz, fs(12), DIM)
-			if it.is_dir && clicked(row) {
-				p, _ := filepath.join({app.home, it.name}, context.temp_allocator)
-				push(.Navigate, 0, p)
-			}
-			y += px(32)
-		}
-	}
-	y += px(16)
+	// --- sunburst of the home folder (sunburst.odin)
+	y = section(x, y, "容量マップ", "クリックで中へ・中心で上へ・右の一覧で開く")
+	y += draw_sunburst({x, y, w, 0}) + px(16)
 
 	// --- apps
 	sync.mutex_lock(&pk.lock)
@@ -294,14 +188,10 @@ draw_storage :: proc(b: Rect) {
 // True when the workers have something new to show (redraw only then, no busy frames).
 storage_poll :: proc() -> bool {
 	if !is_storage_view() do return false
-	@(static) seen_items: int
 	@(static) seen_scan: bool
-	sync.mutex_lock(&st.lock)
-	n := len(st.items)
-	sync.mutex_unlock(&st.lock)
 	scanning := sync.atomic_load(&pk.scanning)
-	changed := n != seen_items || scanning != seen_scan
-	seen_items, seen_scan = n, scanning
+	changed := sunburst_poll() || scanning != seen_scan
+	seen_scan = scanning
 	return changed
 }
 
