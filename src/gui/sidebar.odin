@@ -233,6 +233,7 @@ draw_sidebar :: proc(w, H: f32) {
 		if p.icon != I_TRASH && p.icon != I_DRIVE do continue
 		nav(side_row(&y, w, p.icon, p.label, app.cwd == p.path), p.path, p.label, .Trash if p.icon == I_TRASH else .Dir)
 	}
+	nav(side_row(&y, w, I_STORAGE, "ストレージ", is_storage_view()), STORAGE, "", .None)
 	for d in devices {
 		r := side_row(&y, w, I_USB, d.label, d.path != "" && app.cwd == d.path, d.path == "")
 		if d.path == "" {

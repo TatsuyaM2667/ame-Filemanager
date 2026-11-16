@@ -60,6 +60,13 @@ so it idles at **0% CPU and ~19 MB of RAM**.
   `*.jpg *.png`), paste a copied image or text as a new file, Tab completion in the path bar,
   item counts for folders in list view, free space of the current drive in the sidebar, mouse
   back / forward buttons.
+- **Storage** (sidebar → ストレージ): every disk's used / free space, what the home folder's
+  items take (computed in the background, click to open), and the installed applications by
+  size — apk, pacman, apt, dnf / zypper, xbps, FreeBSD pkg and Flatpak. アンインストール removes one
+  completely (unneeded dependencies and settings too: `apk del`, `pacman -Rns`, `apt-get purge
+  --autoremove`, `flatpak uninstall --delete-data`…) after a confirmation that shows the exact
+  command; it runs in a terminal through doas / sudo / pkexec, where you enter the password.
+  The kernel, libc, init, the package manager and the like have no remove button.
 - **Recent files** in the sidebar (the freedesktop recently-used list GNOME / GTK apps keep).
 - **Search inside files**: turn on 中身 in the search bar to also list files whose text contains
   the query (ripgrep, or grep), in the background.

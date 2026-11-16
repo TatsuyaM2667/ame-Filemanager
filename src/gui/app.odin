@@ -93,7 +93,7 @@ Pending :: struct {
 
 Dialog :: enum {
 	None, Rename, Mkdir, Compress, Confirm_Delete, Confirm_Empty_Trash, Props, Batch_Rename, Tag_Edit, Tag_Pick,
-	New_File, Select_Pattern, Connect,
+	New_File, Select_Pattern, Connect, Uninstall,
 }
 
 Focus :: enum {
@@ -299,6 +299,13 @@ kind_of :: proc(name: string, mode: os.Permissions) -> Kind {
 load :: proc(path: string) -> bool {
 	dir_counts_clear()
 	if path != app.cwd do folder_sizes_clear() // a reload keeps them
+	if path == STORAGE {
+		virtual.arena_free_all(&app.listing)
+		stop_walk()
+		clear(&app.entries)
+		app.base_count = 0
+		return true
+	}
 	if path == RECENT {
 		virtual.arena_free_all(&app.listing)
 		stop_walk()
@@ -392,7 +399,7 @@ Nav :: enum {
 
 go_to :: proc(path: string, mode := Nav.Push, select_name := "") -> bool {
 	p := path
-	if !strings.has_prefix(p, "tag:") && p != RECENT {
+	if !strings.has_prefix(p, "tag:") && p != RECENT && p != STORAGE {
 		if !filepath.is_abs(p) do p, _ = filepath.join({app.cwd, p}, context.temp_allocator)
 		p, _ = filepath.clean(p, context.temp_allocator)
 	}
@@ -406,6 +413,10 @@ go_to :: proc(path: string, mode := Nav.Push, select_name := "") -> bool {
 	case .Back:    append(&app.fwd, app.cwd)
 	case .Forward: append(&app.back, app.cwd)
 	case .Replace: delete(app.cwd)
+	}
+	if (new_cwd == STORAGE) != (app.cwd == STORAGE) { // entering / leaving the storage page
+		if new_cwd == STORAGE do storage_open()
+		else do storage_close()
 	}
 	app.cwd = new_cwd
 	apply_folder_prefs(p)
@@ -457,6 +468,7 @@ in_trash :: proc() -> bool {
 location_name :: proc() -> string {
 	if in_trash() do return "ゴミ箱"
 	if is_recent_view() do return "最近使用したファイル"
+	if is_storage_view() do return "ストレージ"
 	if is_tag_view() {
 		id, _ := strconv.parse_uint(app.cwd[4:])
 		if t := tag_by_id(u8(id)); t != nil do return t.name
@@ -654,6 +666,7 @@ dialog_ok :: proc() {
 	switch app.dialog {
 	case .New_File:       new_file_ok()
 	case .Connect:        connect_ok()
+	case .Uninstall:      uninstall_ok()
 	case .Select_Pattern: select_pattern_ok()
 	case .Rename:
 		vi := app.dialog_target
@@ -1451,7 +1464,7 @@ draw_pathbar :: proc(bar: Rect) {
 	}
 	segs := make([dynamic]Seg, context.temp_allocator)
 	if is_tag_view() {
-		append(&segs, Seg{location_name(), app.cwd, I_RECENT if is_recent_view() else I_TAG})
+		append(&segs, Seg{location_name(), app.cwd, I_RECENT if is_recent_view() else (I_STORAGE if is_storage_view() else I_TAG)})
 	} else if in_trash() {
 		append(&segs, Seg{"ゴミ箱", app.trash_files, I_TRASH})
 	} else {
@@ -1516,6 +1529,10 @@ draw_pathbar :: proc(bar: Rect) {
 }
 
 draw_body :: proc() {
+	if is_storage_view() {
+		draw_storage(app.body)
+		return
+	}
 	b := app.body
 	n := len(app.view)
 	app.cols = max(1, int((b.w - px(24)) / px(GRID_CELL_W)))
@@ -1851,6 +1868,9 @@ draw_dialog :: proc(W, H: f32) {
 	case .Confirm_Empty_Trash:
 		title = "ゴミ箱を空にしますか？"
 		body, ok, style = "ゴミ箱内のすべてのアイテムが完全に削除されます。", "ゴミ箱を空にする", 2
+	case .Uninstall:
+		title, body = uninstall_text()
+		ok, style = "アンインストール", 2
 	case .None, .Props, .Batch_Rename, .Tag_Edit, .Tag_Pick: // drawn elsewhere
 	}
 	tsize := fs(16)
@@ -2126,6 +2146,7 @@ on_event :: proc(ev: Ev) -> bool {
 		} else do delete(ev.text)
 	case .Focus:
 		if ev.button == 0 do refresh_devices() // drives may have been plugged in meanwhile
+		if ev.button == 0 && is_storage_view() do packages_rescan() // back from a removal's terminal
 	case .Dnd_Motion:
 		app.dnd_on, app.dnd_x, app.dnd_y = true, ev.x * app.S, ev.y * app.S
 		dd.mods = ev.mods
@@ -2197,6 +2218,7 @@ dump_frame :: proc(path: string) {
 
 main :: proc() {
 	if len(os.args) >= 2 && os.args[1] == "--render" do os.exit(render_helper_main(os.args[2:])) // document renderer (viewer.odin)
+	if len(os.args) >= 2 && os.args[1] == "--hold" do os.exit(hold_main(os.args[2:])) // inside a removal's terminal (pkgs.odin)
 	opacity := 0.7
 	if s := os.get_env("GF_OPACITY", context.temp_allocator); s != "" {
 		if v, ok := strconv.parse_f64(s); ok do opacity = clamp(v, 0, 1)
@@ -2272,6 +2294,7 @@ main :: proc() {
 			if app.sort == .Lang || app.group == .Lang || app.lang_filter != "" do refilter()
 		}
 		if folder_sizes_poll() do dirty = true
+		if storage_poll() do dirty = true
 		if content_poll() {
 			refilter()
 			dirty = true

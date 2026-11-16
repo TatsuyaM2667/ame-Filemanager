@@ -4,6 +4,7 @@ import "core:os"
 import "core:sys/posix"
 import "core:strings"
 import "core:testing"
+import "core:sync"
 import "core:path/filepath"
 import "core:log"
 import "core:slice"
@@ -588,4 +589,46 @@ test_config_and_tmp_safety :: proc(t: ^testing.T) {
 	fi, err := os.stat(dir, context.temp_allocator)
 	testing.expect(t, err == nil && fi.mode == {.Read_User, .Write_User, .Execute_User}) // 0700
 	_ = os.remove_all(dir)
+}
+
+@(test)
+test_packages :: proc(t: ^testing.T) {
+	// names that could be read as options or shell are refused
+	testing.expect(t, pkg_name_ok("gtk+3.0"))
+	testing.expect(t, pkg_name_ok("org.mozilla.firefox"))
+	testing.expect(t, !pkg_name_ok("-rf"))
+	testing.expect(t, !pkg_name_ok("foo bar"))
+	testing.expect(t, !pkg_name_ok("foo;rm"))
+	argv, ok := uninstall_argv(Package{name = "-x", manager = .Apk})
+	testing.expect(t, !ok)
+	argv, ok = uninstall_argv(Package{name = "linux-lts", manager = .Apk, protected = true})
+	testing.expect(t, !ok) // the kernel, libc, the package manager… have no remove at all
+	argv, ok = uninstall_argv(Package{name = "org.gimp.GIMP", manager = .Flatpak})
+	testing.expect(t, ok && strings.join(argv[:], " ", context.temp_allocator) == "flatpak uninstall --user --delete-data org.gimp.GIMP")
+	argv, ok = uninstall_argv(Package{name = "htop", manager = .Pacman})
+	if ok do testing.expect_value(t, strings.join(argv[1:], " ", context.temp_allocator), "pacman -Rns htop") // argv[0] is doas / sudo / pkexec
+
+	// each terminal gets the command the way it expects it
+	testing.expect_value(t, strings.join(terminal_argv("foot", {"a", "b"})[:], " ", context.temp_allocator), "foot a b")
+	testing.expect_value(t, strings.join(terminal_argv("gnome-terminal", {"a"})[:], " ", context.temp_allocator), "gnome-terminal -- a")
+	testing.expect_value(t, strings.join(terminal_argv("/usr/bin/ghostty", {"a"})[:], " ", context.temp_allocator), "/usr/bin/ghostty -e a")
+
+	testing.expect_value(t, parse_human_size("1.5 GB"), i64(1_500_000_000))
+	testing.expect_value(t, parse_human_size("12 kB"), i64(12_000))
+	testing.expect_value(t, parse_human_size("??"), i64(-1))
+
+	// the real databases of this machine (whatever package manager it has)
+	packages_rescan()
+	start := time.tick_now()
+	for sync.atomic_load(&pk.scanning) && time.duration_seconds(time.tick_since(start)) < 20 do time.sleep(10 * time.Millisecond)
+	if os.exists("/lib/apk/db/installed") {
+		explicit, sized := 0, 0
+		for p in pk.list {
+			if p.explicit do explicit += 1
+			if p.size > 0 do sized += 1
+		}
+		testing.expect(t, len(pk.list) > 0 && explicit > 0 && explicit < len(pk.list) && sized > 0)
+		testing.expect(t, len(pk.list) < 2 || pk.list[0].size >= pk.list[1].size) // biggest first
+		for p in pk.list do if p.name == "linux-lts" || p.name == "apk-tools" || p.name == "musl" do testing.expect(t, p.protected)
+	}
 }
