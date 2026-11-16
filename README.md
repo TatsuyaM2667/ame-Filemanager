@@ -91,6 +91,23 @@ so it idles at **0% CPU and about 20–35 MB of RAM** (most of it is the window'
 
 ## Install
 
+**Any Linux distribution (or FreeBSD), one line:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TatsuyaM2667/ame-Filemanager/main/get.sh | sh
+```
+
+It installs the needed packages with your package manager (showing the command; doas / sudo asks
+for your password), fetches Odin dev-2026-08 into `~/.local/share/ame-filemanager/` (official
+binary on glibc systems, built from source on musl ones), builds the app into `~/.local` and adds
+the icon font if missing. `NO_DEPS=1` skips the packages, `NO_DEFAULT=1` keeps your default file
+manager, `PREFIX=/usr/local` installs elsewhere.
+
+**Arch Linux (AUR):** `yay -S ame-filemanager-git` (or `paru -S …`). The package brings its own
+pinned Odin, so the repository's `odin` version doesn't matter.
+
+**By hand:**
+
 ```bash
 git clone https://github.com/TatsuyaM2667/ame-Filemanager.git
 cd ame-Filemanager
@@ -100,14 +117,14 @@ NO_DEFAULT=1 ./install.sh   # keep your current default file manager
 
 | System          | Packages, then `./install.sh`                                                                                                                             |
 | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Chimera Linux   | `apk add wayland-devel libxkbcommon-devel freetype-devel libarchive-progs ffmpeg`                                                                         |
-| Arch Linux      | `cd packaging/arch && makepkg -si` (or `pacman -S odin wayland libxkbcommon freetype2 libarchive ffmpeg xdg-utils noto-fonts-cjk ttf-nerd-fonts-symbols`) |
-| Debian / Ubuntu | `apt install libwayland-dev libxkbcommon-dev libfreetype-dev libarchive-tools ffmpeg xdg-utils fonts-noto-cjk`                                            |
-| Fedora          | `dnf install wayland-devel libxkbcommon-devel freetype-devel bsdtar ffmpeg-free xdg-utils google-noto-sans-cjk-fonts`                                     |
-| openSUSE        | `zypper install wayland-devel libxkbcommon-devel freetype2-devel bsdtar ffmpeg xdg-utils noto-sans-cjk-fonts`                                             |
-| Void Linux      | `xbps-install wayland-devel libxkbcommon-devel freetype-devel bsdtar ffmpeg xdg-utils noto-fonts-cjk`                                                     |
-| Alpine Linux    | `apk add wayland-dev libxkbcommon-dev freetype-dev libarchive-tools ffmpeg xdg-utils font-noto-cjk`                                                       |
-| Gentoo          | `emerge dev-libs/wayland x11-libs/libxkbcommon media-libs/freetype app-arch/libarchive media-video/ffmpeg x11-misc/xdg-utils media-fonts/noto-cjk`        |
+| Chimera Linux   | `apk add wayland-devel libxkbcommon-devel freetype-devel libarchive-progs clang ffmpeg`                                                                         |
+| Arch Linux      | `cd packaging/arch && makepkg -si` (or `pacman -S odin wayland libxkbcommon freetype2 libarchive clang ffmpeg xdg-utils noto-fonts-cjk ttf-nerd-fonts-symbols`) |
+| Debian / Ubuntu | `apt install libwayland-dev libxkbcommon-dev libfreetype-dev libarchive-tools clang ffmpeg xdg-utils fonts-noto-cjk`                                            |
+| Fedora          | `dnf install wayland-devel libxkbcommon-devel freetype-devel bsdtar clang ffmpeg-free xdg-utils google-noto-sans-cjk-fonts`                                     |
+| openSUSE        | `zypper install wayland-devel libxkbcommon-devel freetype2-devel bsdtar clang ffmpeg xdg-utils noto-sans-cjk-fonts`                                             |
+| Void Linux      | `xbps-install wayland-devel libxkbcommon-devel freetype-devel bsdtar clang ffmpeg xdg-utils noto-fonts-cjk`                                                     |
+| Alpine Linux    | `apk add wayland-dev libxkbcommon-dev freetype-dev libarchive-tools clang ffmpeg xdg-utils font-noto-cjk`                                                       |
+| Gentoo          | `emerge dev-libs/wayland x11-libs/libxkbcommon media-libs/freetype app-arch/libarchive llvm-core/clang media-video/ffmpeg x11-misc/xdg-utils media-fonts/noto-cjk`        |
 | FreeBSD         | `pkg install odin wayland libxkbcommon freetype2 libarchive xdg-utils ffmpeg`                                                                             |
 
 Odin is not packaged by most distributions: take a release (dev-2026-08 or newer) from

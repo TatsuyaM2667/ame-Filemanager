@@ -2,21 +2,35 @@
 pkgname=ame-filemanager-git
 pkgver=r0
 pkgrel=1
-pkgdesc="Translucent GNOME Files-style file manager in pure Odin (Wayland), with Filee-style conversion"
+pkgdesc="Translucent GNOME Files-style file manager in pure Odin (Wayland): sunburst storage map, language badges, Filee-style conversion"
 arch=(x86_64 aarch64)
 url="https://github.com/TatsuyaM2667/ame-Filemanager"
 license=(MIT)
-depends=(wayland libxkbcommon freetype2 libarchive xdg-utils ttf-nerd-fonts-symbols noto-fonts-cjk)
-optdepends=('ffmpeg: image/video/audio conversion and previews'
+depends=(wayland libxkbcommon freetype2 libarchive xdg-utils hicolor-icon-theme ttf-nerd-fonts-symbols noto-fonts-cjk)
+optdepends=('ffmpeg: thumbnails, video / audio, conversion, music player'
+            'poppler-glib: PDF viewer'
+            'librsvg: SVG viewer'
+            'ripgrep: faster search inside files'
+            'git: Git status dots'
+            'sshfs: SFTP locations'
+            'udisks2: mounting USB drives'
+            'flatpak: Flatpak apps on the storage page'
             'pandoc: document conversion'
             'libreoffice-fresh: office → PDF'
             'imagemagick: image → PDF'
             'adwaita-fonts: GNOME look')
-makedepends=(odin git)
+# Odin is pinned to the release the app is developed with (newer ones may change the
+# standard library), so it comes as a source file instead of the repository's odin package.
+_odin=dev-2026-08
+makedepends=(git clang)
 provides=(ame-filemanager)
-conflicts=(glassfilee-git)
+conflicts=(ame-filemanager glassfilee-git)
 source=("git+$url.git")
-sha256sums=(SKIP)
+source_x86_64=("odin-$_odin-x86_64.tar.gz::https://github.com/odin-lang/Odin/releases/download/$_odin/odin-linux-amd64-$_odin.tar.gz")
+source_aarch64=("odin-$_odin-aarch64.tar.gz::https://github.com/odin-lang/Odin/releases/download/$_odin/odin-linux-arm64-$_odin.tar.gz")
+sha256sums=('SKIP')
+sha256sums_x86_64=('d858c0a182bb28d7b04b04dbb8aed592a9c96c84e4400ee917c74b45848a4d87')
+sha256sums_aarch64=('dea1607f593f6ec2cecf084a6ee9ae9571adc5f5ef0624055efbc9cd57b9dd66')
 
 pkgver() {
     cd ame-Filemanager
@@ -25,7 +39,9 @@ pkgver() {
 
 build() {
     cd ame-Filemanager
-    odin build src/gui -out:ame-filemanager -o:speed
+    local odin
+    odin=$(echo "$srcdir"/odin-linux-*/odin)
+    "$odin" build src/gui -out:ame-filemanager -o:speed
 }
 
 package() {
@@ -34,4 +50,5 @@ package() {
     install -Dm644 ame-filemanager.desktop "$pkgdir/usr/share/applications/ame-filemanager.desktop"
     install -Dm644 assets/ame-filemanager.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/ame-filemanager.svg"
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 assets/icons/SOURCES.md "$pkgdir/usr/share/licenses/$pkgname/ICONS.md"
 }
