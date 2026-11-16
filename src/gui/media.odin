@@ -50,6 +50,7 @@ Media :: struct {
 	lyrics_for:  string, // track the lyrics belong to
 	lyric_y:     f32, // animated scroll position (lines)
 	mv:          string, // music video path ("" = none)
+	show_mv:     bool, // the MV button in Now Playing: off = the cover art (the default)
 	video:       ^Video,
 	panel:       Panel,
 	pending_dir: bool, // folder play: start when the scan finishes
@@ -164,7 +165,9 @@ vid_open :: proc(path: string, at: f64, w, h: int) -> ^Video {
 	vf := fmt_vf(w, h)
 	p, perr := os.process_start({
 		// -re paces decoding at playback speed, so frames arrive when they should be shown
-		command = {"ffmpeg", "-v", "error", "-nostdin", "-re", "-ss", fmt_f(at), "-i", path, "-an", "-vf", vf, "-pix_fmt", "bgra", "-f", "rawvideo", "-"},
+		// 2 decoder threads, 1 filter thread, no loop filter: a 1080p clip at 640×360 takes less than
+		// half the CPU (2.5 → 1.1 s per 5 s) and a quarter less memory; no visible difference at that size
+		command = {"ffmpeg", "-v", "error", "-nostdin", "-threads", "2", "-filter_threads", "1", "-skip_loop_filter", "all", "-flags2", "fast", "-re", "-ss", fmt_f(at), "-i", path, "-an", "-sn", "-vf", vf, "-pix_fmt", "bgra", "-f", "rawvideo", "-"},
 		stdout  = wr,
 	})
 	os.close(wr)
@@ -195,10 +198,12 @@ fmt_f :: proc(f: f64) -> string {
 vid_close :: proc(v: ^Video) {
 	if v == nil do return
 	sync.atomic_store(&v.stop, true)
-	posix.kill(v.pid, .SIGCONT)
-	posix.kill(v.pid, .SIGTERM)
+	// SIGKILL, not SIGTERM: once the reader stops, ffmpeg sits blocked writing into a full
+	// pipe and never gets to act on SIGTERM, so waiting for it froze the whole app. KILL ends
+	// it at once, paused (SIGSTOP) or not.
+	posix.kill(v.pid, .SIGKILL)
 	status: i32
-	posix.waitpid(v.pid, &status, {}) // also unblocks the reader (pipe closes)
+	posix.waitpid(v.pid, &status, {}) // returns right away now; the pipe closes, so the reader thread ends
 	thread.join(v.th)
 	thread.destroy(v.th)
 	os.close(v.out)
@@ -234,7 +239,7 @@ video_pause :: proc(paused: bool) {vid_pause(md.video, paused)}
 
 // Keeps the decoder running exactly while Now Playing shows the video.
 video_sync :: proc() {
-	want := mu.full && md.mv != "" && mu.pid != 0
+	want := mu.full && md.mv != "" && md.show_mv && mu.pid != 0
 	if want && md.video == nil do md.video = vid_open(md.mv, music_pos(), VIDEO_W, VIDEO_H)
 	else if !want && md.video != nil do video_stop()
 }

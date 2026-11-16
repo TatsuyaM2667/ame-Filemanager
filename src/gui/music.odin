@@ -711,7 +711,8 @@ draw_now_playing :: proc(area: Rect) {
 	avail_h := info_y - px(20) - (L.y + px(56))
 	big_s := min(colw, avail_h, px(440))
 	bw_, bh_ := big_s, big_s
-	if md.mv != "" do bw_, bh_ = min(colw, avail_h * 16 / 9, px(640)), min(colw, avail_h * 16 / 9, px(640)) * 9 / 16
+	mv_on := md.mv != "" && md.show_mv
+	if mv_on do bw_, bh_ = min(colw, avail_h * 16 / 9, px(640)), min(colw, avail_h * 16 / 9, px(640)) * 9 / 16
 	bw_, bh_ = bw_ * mu.art_scale, bh_ * mu.art_scale
 	big := Rect{L.x + (L.w - bw_) / 2, L.y + px(56) + (avail_h - bh_) / 2, bw_, bh_}
 	// with the art big, art + text + controls sit together, centered; with a panel open
@@ -721,7 +722,7 @@ draw_now_playing :: proc(area: Rect) {
 	ctl_y -= lift
 	bar_y -= lift
 	info_y -= lift
-	small := Rect{L.x + margin, L.y + px(58), px(64) * (16.0 / 9 if md.mv != "" else 1), px(64)}
+	small := Rect{L.x + margin, L.y + px(58), px(64) * (16.0 / 9 if mv_on else 1), px(64)}
 	art_r := lerp_rect(big, small, k)
 	radius := px(12) - px(4) * k
 	for i in 1 ..< 10 { // soft shadow: faint rings spreading out (rings: the art covers the middle)
@@ -784,7 +785,8 @@ draw_now_playing :: proc(area: Rect) {
 	if glyph_btn({ccx + gap, ctl_y}, px(30), I_NEXT, fs(26)) do music_step(1)
 
 	// bottom row: lyrics · shuffle · repeat · up next
-	slots := [4]f32{-1.5, -0.5, 0.5, 1.5}
+	has_mv := md.mv != ""
+	slots := [5]f32{-2, -1, 0, 1, 2} if has_mv else [5]f32{-1.5, -0.5, 0.5, 1.5, 0}
 	step := min(colw / 4, px(96))
 	pill :: proc(c: [2]f32, icon: rune, on: bool, enabled := true, badge := "") -> bool {
 		r := Rect{c.x - px(22), c.y - px(17), px(44), px(34)}
@@ -807,6 +809,8 @@ draw_now_playing :: proc(area: Rect) {
 		if !wide && que_on do mu.panel_open = false
 		else {md.panel = .Queue; mu.panel_open = true}
 	}
+	// MV: only when the song has a same-name video; off by default (the cover art)
+	if has_mv && pill({ccx + slots[4] * step, row_y}, I_VIDEO, md.show_mv) do md.show_mv = !md.show_mv
 
 	// lyrics / Up Next
 	pr: Rect
