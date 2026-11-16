@@ -54,9 +54,7 @@ save_bookmarks :: proc() {
 		}
 		strings.write_byte(&b, '\n')
 	}
-	p := bookmarks_file()
-	_ = os.make_directory_all(filepath.dir(p))
-	_ = os.write_entire_file_from_string(p, strings.to_string(b))
+	write_config(bookmarks_file(), strings.to_string(b)) // shared with GTK apps: never leave it half-written
 }
 
 add_bookmark :: proc(path: string) {

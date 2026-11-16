@@ -11,6 +11,7 @@ import "core:path/filepath"
 import "core:slice"
 import "core:strconv"
 import "core:strings"
+import "core:sys/posix"
 import "core:sync"
 import "core:thread"
 
@@ -501,22 +502,41 @@ SKIP_DIRS :: []string {"node_modules", "target", "zig-cache", "zig-out", "build"
 main_language :: proc(dir: string, dirs: ^[dynamic]string = nil) -> (Lang, bool) {
 	bytes := make(map[string]i64, 16, context.temp_allocator)
 	budget := 4000
+	// readdir's d_type says what each entry is, so only source files cost a stat (for
+	// their size): a folder of 3,000 photos is read without a single stat.
 	walk :: proc(dir: string, depth: int, bytes: ^map[string]i64, budget: ^int, dirs: ^[dynamic]string) {
-		infos, err := os.read_all_directory_by_path(dir, context.temp_allocator)
-		if err != nil do return
-		for fi in infos {
-			if budget^ <= 0 do return
+		d := posix.opendir(strings.clone_to_cstring(dir, context.temp_allocator))
+		if d == nil do return
+		defer posix.closedir(d)
+		for budget^ > 0 {
+			ent := posix.readdir(d)
+			if ent == nil do break
+			name := string(cstring(&ent.d_name[0]))
+			if len(name) == 0 || name[0] == '.' do continue // also . and ..
 			budget^ -= 1
-			if strings.has_prefix(fi.name, ".") do continue
-			if fi.type == .Directory {
-				if depth < 3 && !slice.contains(SKIP_DIRS, fi.name) {
-					if dirs != nil && len(dirs) < 64 do append(dirs, strings.clone(fi.fullpath))
-					walk(fi.fullpath, depth + 1, bytes, budget, dirs)
-				}
-				continue
+			type := ent.d_type
+			if type == .UNKNOWN { // some filesystems don't fill d_type
+				st: posix.stat_t
+				full, _ := filepath.join({dir, name}, context.temp_allocator)
+				if posix.lstat(strings.clone_to_cstring(full, context.temp_allocator), &st) != .OK do continue
+				type = .DIR if posix.S_ISDIR(st.st_mode) else (.REG if posix.S_ISREG(st.st_mode) else .LNK)
 			}
-			ext := strings.to_lower(filepath.ext(fi.name), context.temp_allocator)
-			if icon, ok := LANG_BY_EXT[ext]; ok && icon in LANGUAGE_NAMES do bytes[icon] += max(fi.size, 1)
+			#partial switch type {
+			case .DIR:
+				if depth >= 3 || slice.contains(SKIP_DIRS, name) do continue
+				full, _ := filepath.join({dir, name}, context.temp_allocator)
+				if dirs != nil && len(dirs) < 64 do append(dirs, strings.clone(full))
+				walk(full, depth + 1, bytes, budget, dirs) // symlinks (LNK) are not followed
+			case .REG:
+				ext := strings.to_lower(filepath.ext(name), context.temp_allocator)
+				icon, ok := LANG_BY_EXT[ext]
+				if !ok || icon not_in LANGUAGE_NAMES do continue
+				st: posix.stat_t
+				full, _ := filepath.join({dir, name}, context.temp_allocator)
+				size: i64 = 1
+				if posix.stat(strings.clone_to_cstring(full, context.temp_allocator), &st) == .OK do size = max(i64(st.st_size), 1)
+				bytes[icon] += size
+			}
 		}
 	}
 	walk(dir, 0, &bytes, &budget, dirs)

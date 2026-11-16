@@ -152,14 +152,33 @@ group_label :: proc(e: ^Entry) -> string {
 grouping :: proc() -> bool {return app.group != .None && !tree_mode()}
 
 // Index of the standard (XDG) folder this entry is in the sidebar's list, or -1.
+// The names to look for are worked out once per sort (prepare_sort), so a comparison only
+// compares a few strings — no path building for each of the n·log n comparisons.
 pinned_rank :: proc(e: ^Entry) -> int {
 	if !e.is_dir do return -1
-	p := full_path(e.name)
-	for pl, i in app.places {
-		if pl.icon == I_HOME || pl.icon == I_TRASH || pl.icon == I_DRIVE do continue
-		if pl.path == p do return i
-	}
+	for p in pins[:pin_n] do if p.name == e.name do return p.rank
 	return -1
+}
+
+@(private = "file") Pin :: struct {
+	name: string, // as it appears in app.entries (a slice of the place's path)
+	rank: int,
+}
+@(private = "file") pins: [16]Pin
+@(private = "file") pin_n: int
+
+@(private = "file")
+prepare_pins :: proc() {
+	pin_n = 0
+	for pl, i in app.places {
+		if pl.icon == I_HOME || pl.icon == I_TRASH || pl.icon == I_DRIVE || pin_n == len(pins) do continue
+		switch {
+		case is_tag_view() && len(pl.path) > 1:   pins[pin_n] = {pl.path[1:], i} // virtual views list absolute paths
+		case filepath.dir(pl.path) == app.cwd:     pins[pin_n] = {filepath.base(pl.path), i}
+		case:                                      continue
+		}
+		pin_n += 1
+	}
 }
 
 // Sort order: group, then the standard folders, then folders first (if on), then the key, then the name.
@@ -213,6 +232,7 @@ entry_less :: proc(x, y: int) -> bool {
 
 // Called before sorting: local-time day boundaries for date groups.
 prepare_sort :: proc() {
+	prepare_pins()
 	now := libc.time(nil)
 	tm := libc.localtime(&now)^
 	tm.tm_hour, tm.tm_min, tm.tm_sec = 0, 0, 0
@@ -337,9 +357,7 @@ load_view_prefs :: proc() {
 save_view_prefs :: proc() {
 	view := "grid" if app.grid else ("tree" if app.tree else "list")
 	s := fmt.tprintf("sort=%v\ndesc=%d\ndirs=%d\ngroup=%v\nview=%s\n", app.sort, int(app.sort_desc), int(app.dirs_first), app.group, view)
-	p := view_conf()
-	_ = os.make_directory_all(filepath.dir(p))
-	_ = os.write_entire_file_from_string(p, s)
+	write_config(view_conf(), s)
 }
 
 // Per-folder order: folders.conf holds one "sort\tdesc\tdirs\tgroup\tpath" line per
@@ -384,7 +402,7 @@ remember_sort :: proc() {
 	for path, f in folder_prefs {
 		fmt.sbprintf(&b, "%v\t%d\t%d\t%v\t%s\n", f.sort, int(f.desc), int(f.dirs), f.group, path)
 	}
-	_ = os.write_entire_file_from_string(folders_conf(), strings.to_string(b))
+	write_config(folders_conf(), strings.to_string(b))
 }
 
 @(private = "file")

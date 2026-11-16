@@ -567,3 +567,24 @@ test_pinned_folders :: proc(t: ^testing.T) {
 	}
 	testing.expect_value(t, app.entries[app.view[2]].name, "zzz.txt") // the rest by the sort (newest first)
 }
+
+@(test)
+test_config_and_tmp_safety :: proc(t: ^testing.T) {
+	p := "/tmp/ame-fm-test-cfg/sub/x.conf"
+	defer _ = os.remove_all("/tmp/ame-fm-test-cfg")
+	testing.expect(t, write_config(p, "a=1\n"))
+	testing.expect(t, write_config(p, "a=2\n"))
+	data, _ := os.read_entire_file_from_path(p, context.temp_allocator)
+	testing.expect_value(t, string(data), "a=2\n")
+	testing.expect(t, !os.exists("/tmp/ame-fm-test-cfg/sub/x.conf.new")) // nothing left behind
+
+	// without XDG_RUNTIME_DIR, scratch files go to a private mkdtemp directory
+	old := os.get_env("XDG_RUNTIME_DIR", context.temp_allocator)
+	posix.unsetenv("XDG_RUNTIME_DIR")
+	defer if old != "" do posix.setenv("XDG_RUNTIME_DIR", strings.clone_to_cstring(old, context.temp_allocator), true)
+	tp := tmp_path("log")
+	dir := filepath.dir(tp)
+	testing.expect(t, strings.has_prefix(dir, "/tmp/ame-fm-") && dir != "/tmp")
+	fi, err := os.stat(dir, context.temp_allocator)
+	testing.expect(t, err == nil && fi.mode == {.Read_User, .Write_User, .Execute_User}) // 0700
+}

@@ -168,6 +168,10 @@ set_size :: proc(face: FT_Face, size: i32) {
 get_glyph :: proc(r: rune, size: i32, bold := false) -> Glyph {
 	key := u64(r) | u64(size) << 32 | (u64(1) << 63 if bold else 0)
 	if g, ok := cache[key]; ok do return g
+	if len(cache) >= 8192 { // a long session with many sizes / scripts: start over instead of growing forever
+		for _, old in cache do delete(old.px)
+		clear(&cache)
+	}
 
 	g: Glyph
 	faces := &chain[1 if bold else 0]

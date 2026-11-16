@@ -186,9 +186,21 @@ convert_files :: proc(t: Target, names: []string) {
 
 @(private = "file") tmp_seq: int
 
+@(private = "file") private_tmp: string
+
+// Scratch files (ffmpeg progress / log). In XDG_RUNTIME_DIR (private to the user); without
+// it, in our own mkdtemp directory (0700) — never under a guessable name in shared /tmp,
+// where another user could plant a symlink and have the log written over one of our files.
 tmp_path :: proc(ext: string) -> string {
 	dir := os.get_env("XDG_RUNTIME_DIR", context.temp_allocator)
-	if dir == "" do dir = "/tmp"
+	if dir == "" {
+		if private_tmp == "" {
+			tmpl := [?]u8{'/', 't', 'm', 'p', '/', 'a', 'm', 'e', '-', 'f', 'm', '-', 'X', 'X', 'X', 'X', 'X', 'X', 0}
+			if d := posix.mkdtemp(&tmpl[0]); d != nil do private_tmp = strings.clone(string(d))
+		}
+		dir = private_tmp
+		if dir == "" do dir = app_config_dir() // still private, if all else fails
+	}
 	tmp_seq += 1
 	p, _ := filepath.join({dir, strings.concatenate({"ame-filemanager-", itoa_tmp(int(posix.getpid())), "-", itoa_tmp(tmp_seq), ".", ext}, context.temp_allocator)}, context.temp_allocator)
 	return p
@@ -500,9 +512,7 @@ save_rules :: proc() {
 		strings.write_string(&b, r.target.ext)
 		strings.write_byte(&b, '\n')
 	}
-	p := rules_file()
-	_ = os.make_directory_all(filepath.dir(p))
-	_ = os.write_entire_file_from_string(p, strings.to_string(b))
+	write_config(rules_file(), strings.to_string(b))
 }
 
 rule_for :: proc(dir: string) -> ^Rule {

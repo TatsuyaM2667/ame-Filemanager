@@ -35,6 +35,18 @@ app_config_dir :: proc() -> string {
 	return dir
 }
 
+// Writes a settings file atomically (temp file + rename): a crash or a full disk midway
+// leaves the old file intact instead of an empty one.
+write_config :: proc(path, data: string) -> bool {
+	_ = os.make_directory_all(filepath.dir(path))
+	tmp := strings.concatenate({path, ".new"}, context.temp_allocator)
+	if os.write_entire_file_from_string(tmp, data) != nil {
+		_ = os.remove(tmp)
+		return false
+	}
+	return os.rename(tmp, path) == nil
+}
+
 @(private = "file")
 tags_conf :: proc() -> string {
 	p, _ := filepath.join({app_config_dir(), "tags.conf"}, context.temp_allocator)
@@ -76,10 +88,11 @@ load_tags :: proc() {
 save_tags :: proc() {
 	b := strings.builder_make(context.temp_allocator)
 	for t in tag_list do fmt.sbprintf(&b, "tag\t%d\t%d\t%s\n", t.id, t.color, t.name)
-	for path, mask in file_tags do fmt.sbprintf(&b, "file\t%x\t%s\n", mask, path)
-	p := tags_conf()
-	_ = os.make_directory_all(filepath.dir(p))
-	_ = os.write_entire_file_from_string(p, strings.to_string(b))
+	for path, mask in file_tags {
+		if strings.contains_rune(path, '\n') do continue // one line per file: such a name would break the format
+		fmt.sbprintf(&b, "file\t%x\t%s\n", mask, path)
+	}
+	write_config(tags_conf(), strings.to_string(b))
 }
 
 tag_by_id :: proc(id: u8) -> ^Tag {

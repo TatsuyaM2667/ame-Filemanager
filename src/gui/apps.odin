@@ -182,6 +182,7 @@ draw_app_icon :: proc(path: string, cx, cy, size: f32) -> bool {
 	key := strings.concatenate({path, "@", itoa_tmp(s)}, context.temp_allocator)
 	img, ok := app_icons[key]
 	if !ok {
+		if fi, serr := os.stat(path, context.temp_allocator); serr != nil || fi.size > 1 << 20 do return false // an icon, not a 2 GB "svg"
 		data, err := os.read_entire_file_from_path(path, context.temp_allocator)
 		if err != nil do return false
 		img = svg_rasterize(string(data), s)

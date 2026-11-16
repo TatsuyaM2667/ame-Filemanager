@@ -27,8 +27,7 @@ load_servers :: proc() {
 
 @(private = "file")
 save_servers :: proc() {
-	_ = os.make_directory_all(app_config_dir())
-	_ = os.write_entire_file_from_string(net_conf(), strings.concatenate({strings.join(servers[:], "\n", context.temp_allocator), "\n"}, context.temp_allocator))
+	write_config(net_conf(), strings.concatenate({strings.join(servers[:], "\n", context.temp_allocator), "\n"}, context.temp_allocator))
 }
 
 // [user@]host:[path] that can't be mistaken for an ssh option ("-oProxyCommand=…")
