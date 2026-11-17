@@ -301,13 +301,19 @@ projects_clear :: proc() {
 	sync.mutex_lock(&q.lock)
 	q.gen += 1
 	for d in q.jobs do delete(d)
-	clear(&q.jobs)
+	delete(q.jobs)
+	q.jobs = nil
 	sync.mutex_unlock(&q.lock)
 	roots := make([dynamic]string, context.temp_allocator)
 	for k in projects do append(&roots, strings.clone(k, context.temp_allocator))
 	for k in roots do project_free(k)
 	for k in stale do delete(k)
-	clear(&stale)
+	// the containers themselves too: a map keeps the allocator it was first grown with, and
+	// next time it should be today's (the test runner hands every test its own)
+	delete(projects)
+	projects = nil
+	delete(stale)
+	stale = nil
 }
 
 // Folders to watch: those of the projects drawn in the last frame.

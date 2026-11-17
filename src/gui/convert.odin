@@ -8,6 +8,7 @@ import "core:math"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
+import "core:sync"
 import "core:sys/posix"
 
 Cat :: enum {
@@ -69,8 +70,11 @@ cat_of :: proc(name: string) -> Cat {
 }
 
 @(private = "file") tool_cache: map[string]bool
+@(private = "file") tool_lock: sync.Mutex // worker threads ask too (package scan, content search)
 
 have_tool :: proc(name: string) -> bool {
+	sync.mutex_lock(&tool_lock)
+	defer sync.mutex_unlock(&tool_lock)
 	if v, ok := tool_cache[name]; ok do return v
 	found := false
 	path := os.get_env("PATH", context.temp_allocator)

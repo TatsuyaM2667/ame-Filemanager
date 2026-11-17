@@ -93,7 +93,7 @@ Pending :: struct {
 
 Dialog :: enum {
 	None, Rename, Mkdir, Compress, Confirm_Delete, Confirm_Empty_Trash, Props, Batch_Rename, Tag_Edit, Tag_Pick,
-	New_File, Select_Pattern, Connect, Uninstall,
+	New_File, Select_Pattern, Connect, Uninstall, Cleanup,
 }
 
 Focus :: enum {
@@ -667,6 +667,7 @@ dialog_ok :: proc() {
 	case .New_File:       new_file_ok()
 	case .Connect:        connect_ok()
 	case .Uninstall:      uninstall_ok()
+	case .Cleanup:        cleanup_ok()
 	case .Select_Pattern: select_pattern_ok()
 	case .Rename:
 		vi := app.dialog_target
@@ -1871,6 +1872,9 @@ draw_dialog :: proc(W, H: f32) {
 	case .Uninstall:
 		title, body = uninstall_text()
 		ok, style = "アンインストール", 2
+	case .Cleanup:
+		title, body = cleanup_text()
+		ok, style = "削除", 2
 	case .None, .Props, .Batch_Rename, .Tag_Edit, .Tag_Pick: // drawn elsewhere
 	}
 	tsize := fs(16)

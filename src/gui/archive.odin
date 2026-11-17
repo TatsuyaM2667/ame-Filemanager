@@ -20,7 +20,7 @@ SINGLE_EXTS :: [][2]string{{".gz", "gzip"}, {".z", "gzip"}, {".xz", "xz"}, {".lz
 
 Job_Kind :: enum {
 	Extract, Decompress, Compress, Convert, Mount, Thumb,
-	Net_Mount, Uninstall,
+	Net_Mount, Uninstall, Cleanup,
 }
 
 Job :: struct {
@@ -173,6 +173,9 @@ reap_jobs :: proc() -> bool {
 				net_mount_done(j, ok)
 			case .Uninstall:
 				uninstall_done(j.label, ok)
+			case .Cleanup:
+				if is_storage_view() do cleanup_open() // measure again
+				toastf("「%s」を片付けました", j.label)
 			case .Mount:
 				if !ok do toastf("「%s」を%sできませんでした", j.label, "取り出し" if j.dest == "eject" else "マウント")
 				else if j.dest == "eject" do toastf("「%s」を取り外せます", j.label)

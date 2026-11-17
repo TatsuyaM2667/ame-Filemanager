@@ -41,12 +41,14 @@ Builder :: struct {
 	first:      [2]f32, // device space, start of subpath
 	last:       [2]f32, // device space
 	open:       bool,
+	polys:      [dynamic][dynamic][2]f32, // the outline in device space (for strokes)
 }
 
 @(private = "file")
 line_to :: proc(b: ^Builder, p: [2]f32) { // p: user space
 	q := apply(b.m, p.x, p.y)
 	if b.last.y != q.y do append(&b.edges, Edge{b.last.x, b.last.y, q.x, q.y, 1 if q.y > b.last.y else -1})
+	if len(b.polys) > 0 do append(&b.polys[len(b.polys) - 1], q)
 	b.last = q
 	b.cur = p
 	b.open = true
@@ -58,12 +60,18 @@ move_to :: proc(b: ^Builder, p: [2]f32) {
 	b.start, b.cur = p, p
 	b.first = apply(b.m, p.x, p.y)
 	b.last = b.first
+	poly := make([dynamic][2]f32, context.temp_allocator)
+	append(&poly, b.first)
+	append(&b.polys, poly)
 }
 
 @(private = "file")
-close :: proc(b: ^Builder) {
+// explicit: the shape says it is closed (Z, rect, circle, polygon) — its outline gets the last
+// side too; an open path is only closed for filling.
+close :: proc(b: ^Builder, explicit := false) {
 	if b.open && b.last != b.first {
 		append(&b.edges, Edge{b.last.x, b.last.y, b.first.x, b.first.y, 1 if b.first.y > b.last.y else -1})
+		if explicit && len(b.polys) > 0 do append(&b.polys[len(b.polys) - 1], b.first)
 	}
 	b.open = false
 	b.last = b.first
@@ -207,7 +215,7 @@ path_data :: proc(b: ^Builder, d: string) {
 			cmd = c
 			l.i += 1
 			if c == 'z' || c == 'Z' {
-				close(b)
+				close(b, true)
 				prev = cmd
 				continue
 			}
@@ -440,10 +448,56 @@ parse_color :: proc(v: string, grads: map[string]u32) -> (rgb: u32, ok: bool) {
 
 @(private = "file")
 Style :: struct {
-	m:       Mat,
-	fill:    string,
-	evenodd: bool,
-	opacity: f32,
+	m:         Mat,
+	fill:      string,
+	evenodd:   bool,
+	opacity:   f32, // the element's (and its groups') opacity
+	fill_op:   f32,
+	stroke:    string, // "" / "none" = no outline
+	stroke_w:  f32,
+	stroke_op: f32,
+}
+
+// Outline of width w around the polylines: one rectangle per segment, lengthened by w/2 at
+// both ends so corners join (square caps / miter-ish joins — fine at icon sizes).
+@(private = "file")
+stroke_edges :: proc(polys: [][dynamic][2]f32, w: f32) -> [dynamic]Edge {
+	out := make([dynamic]Edge, context.temp_allocator)
+	hw := w / 2
+	add :: proc(out: ^[dynamic]Edge, a, b: [2]f32) {
+		if a.y != b.y do append(out, Edge{a.x, a.y, b.x, b.y, 1 if b.y > a.y else -1})
+	}
+	for poly in polys {
+		for i in 0 ..< len(poly) - 1 {
+			p0, p1 := poly[i], poly[i + 1]
+			d := p1 - p0
+			l := math.sqrt(d.x * d.x + d.y * d.y)
+			if l < 1e-4 do continue
+			u := d / l
+			n := [2]f32{-u.y, u.x} * hw
+			a0, a1 := p0 - u * hw, p1 + u * hw
+			// same turning direction for every rectangle, so they add up under nonzero
+			add(&out, a0 + n, a1 + n)
+			add(&out, a1 + n, a1 - n)
+			add(&out, a1 - n, a0 - n)
+			add(&out, a0 - n, a0 + n)
+		}
+	}
+	return out
+}
+
+// Paints coverage in color (premultiplied "over").
+@(private = "file")
+composite :: proc(img: []u32, cov: []f32, rgb: u32, opacity: f32) {
+	for c, k in cov {
+		if c <= 0 do continue
+		a := u32(clamp(c, 0, 1) * clamp(opacity, 0, 1) * 255 + 0.5)
+		if a == 0 do continue
+		src := a << 24 | ((rgb >> 16 & 255) * a / 255) << 16 | ((rgb >> 8 & 255) * a / 255) << 8 | (rgb & 255) * a / 255
+		d := img[k]
+		inv := 255 - a
+		img[k] = src + ((d >> 24 & 255) * inv / 255) << 24 + ((d >> 16 & 255) * inv / 255) << 16 + ((d >> 8 & 255) * inv / 255) << 8 + (d & 255) * inv / 255
+	}
 }
 
 // Renders an SVG document into a size×size premultiplied ARGB image.
@@ -482,7 +536,7 @@ svg_rasterize :: proc(svg: string, size: int, allocator := context.allocator) ->
 	}
 
 	stack := make([dynamic]Style, context.temp_allocator)
-	append(&stack, Style{m = IDENT, fill = "#000", opacity = 1})
+	append(&stack, Style{m = IDENT, fill = "#000", opacity = 1, fill_op = 1, stroke_w = 1, stroke_op = 1})
 	cov := make([]f32, size * size, context.temp_allocator)
 	b := Builder{edges = make([dynamic]Edge, context.temp_allocator)}
 	skipping := 0 // inside <defs>, <clipPath>, <mask>…
@@ -516,7 +570,10 @@ svg_rasterize :: proc(svg: string, size: int, allocator := context.allocator) ->
 		if v, ok := prop(tag, "fill"); ok do st.fill = v
 		if v, ok := prop(tag, "fill-rule"); ok do st.evenodd = v == "evenodd"
 		if v, ok := prop(tag, "opacity"); ok {o, _ := strconv.parse_f32(v); st.opacity *= o}
-		if v, ok := prop(tag, "fill-opacity"); ok {o, _ := strconv.parse_f32(v); st.opacity *= o}
+		if v, ok := prop(tag, "fill-opacity"); ok {o, _ := strconv.parse_f32(v); st.fill_op = o}
+		if v, ok := prop(tag, "stroke"); ok do st.stroke = v
+		if v, ok := prop(tag, "stroke-width"); ok {st.stroke_w, _ = strconv.parse_f32(strings.trim_right(v, "px"))}
+		if v, ok := prop(tag, "stroke-opacity"); ok {o, _ := strconv.parse_f32(v); st.stroke_op = o}
 		if v, ok := attr(tag, "transform"); ok do st.m = mul(top.m, transform(v))
 		if name == "svg" {
 			vb: [dynamic]f32
@@ -542,6 +599,7 @@ svg_rasterize :: proc(svg: string, size: int, allocator := context.allocator) ->
 			continue
 		}
 		clear(&b.edges)
+		b.polys = make([dynamic][dynamic][2]f32, context.temp_allocator)
 		b.m = st.m
 		b.open = false
 		switch name {
@@ -573,7 +631,7 @@ svg_rasterize :: proc(svg: string, size: int, allocator := context.allocator) ->
 				line_to(&b, {x + w, y + h})
 				line_to(&b, {x, y + h})
 			}
-			close(&b)
+			close(&b, true)
 		case "circle", "ellipse":
 			v := [4]f32{}
 			for k, n in ([]string{"cx", "cy", "rx", "ry"}) {
@@ -584,7 +642,7 @@ svg_rasterize :: proc(svg: string, size: int, allocator := context.allocator) ->
 			move_to(&b, {cx + rx, cy})
 			arc(&b, rx, ry, 0, false, true, {cx - rx, cy})
 			arc(&b, rx, ry, 0, false, true, {cx + rx, cy})
-			close(&b)
+			close(&b, true)
 		case "polygon":
 			pts, _ := attr(tag, "points")
 			v := nums(pts)
@@ -592,23 +650,24 @@ svg_rasterize :: proc(svg: string, size: int, allocator := context.allocator) ->
 				if k == 0 do move_to(&b, {v[0], v[1]})
 				else do line_to(&b, {v[k], v[k + 1]})
 			}
-			close(&b)
+			close(&b, true)
 		case:
 			continue
 		}
-		rgb, ok := parse_color(st.fill, grads)
-		if !ok || len(b.edges) == 0 do continue
-		slice.fill(cov, 0)
-		fill_edges(b.edges[:], size, st.evenodd, cov)
-		// composite "over" into the image
-		for c, k in cov {
-			if c <= 0 do continue
-			a := u32(clamp(c, 0, 1) * clamp(st.opacity, 0, 1) * 255 + 0.5)
-			if a == 0 do continue
-			src := a << 24 | ((rgb >> 16 & 255) * a / 255) << 16 | ((rgb >> 8 & 255) * a / 255) << 8 | (rgb & 255) * a / 255
-			d := img[k]
-			inv := 255 - a
-			img[k] = src + ((d >> 24 & 255) * inv / 255) << 24 + ((d >> 16 & 255) * inv / 255) << 16 + ((d >> 8 & 255) * inv / 255) << 8 + (d & 255) * inv / 255
+		close(&b)
+		if rgb, ok := parse_color(st.fill, grads); ok && len(b.edges) > 0 {
+			slice.fill(cov, 0)
+			fill_edges(b.edges[:], size, st.evenodd, cov)
+			composite(img, cov, rgb, st.opacity * st.fill_op)
+		}
+		if rgb, ok := parse_color(st.stroke, grads); ok && st.stroke != "" && st.stroke_w > 0 {
+			scale := math.sqrt(abs(st.m[0] * st.m[3] - st.m[1] * st.m[2]))
+			se := stroke_edges(b.polys[:], max(st.stroke_w * scale, 0.5))
+			if len(se) > 0 {
+				slice.fill(cov, 0)
+				fill_edges(se[:], size, false, cov)
+				composite(img, cov, rgb, st.opacity * st.stroke_op)
+			}
 		}
 	}
 	return img

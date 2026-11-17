@@ -34,6 +34,7 @@ Package :: struct {
 	explicit:            bool, // installed on purpose (not only as a dependency)
 	system:              bool, // Flatpak: system-wide installation
 	protected:           bool, // the system needs it (kernel, libc, init, package manager…): no remove button
+	icon:                string, // its launcher's icon file (SVG / PNG), "" if it has none
 }
 
 // Packages whose removal can leave the machine unbootable or without a way to install
@@ -207,12 +208,12 @@ scan_tools :: proc(out: ^[dynamic]Package, a: mem.Allocator) {
 	// rpm: no "installed on purpose" flag that is cheap to get, so everything counts
 	for f in tool_lines({"rpm", "-qa", "--qf", "%{NAME}\t%{VERSION}-%{RELEASE}\t%{SIZE}\t%{SUMMARY}\n"}) do if len(f) == 4 {
 		n, _ := strconv.parse_i64(f[2])
-		append(out, Package{strings.clone(f[0], a), strings.clone(f[1], a), strings.clone(f[3], a), n, .Rpm, true, false, false})
+		append(out, Package{strings.clone(f[0], a), strings.clone(f[1], a), strings.clone(f[3], a), n, .Rpm, true, false, false, ""})
 	}
 	// FreeBSD pkg: %a = automatic, %sb = flat size in bytes
 	for f in tool_lines({"pkg", "query", "%n\t%v\t%sb\t%a\t%c"}) do if len(f) == 5 {
 		n, _ := strconv.parse_i64(f[2])
-		append(out, Package{strings.clone(f[0], a), strings.clone(f[1], a), strings.clone(f[4], a), n, .Pkg, f[3] == "0", false, false})
+		append(out, Package{strings.clone(f[0], a), strings.clone(f[1], a), strings.clone(f[4], a), n, .Pkg, f[3] == "0", false, false, ""})
 	}
 	// xbps: manually installed ones are listed by -m (sizes aren't in its plain output)
 	if have_tool("xbps-query") {
@@ -229,12 +230,12 @@ scan_tools :: proc(out: ^[dynamic]Package, a: mem.Allocator) {
 			n, v := nv, ""
 			if i := strings.last_index_byte(nv, '-'); i > 0 do n, v = nv[:i], nv[i + 1:]
 			desc := strings.join(fields[2:], " ", context.temp_allocator)
-			append(out, Package{strings.clone(n, a), strings.clone(v, a), strings.clone(desc, a), -1, .Xbps, n in manual, false, false})
+			append(out, Package{strings.clone(n, a), strings.clone(v, a), strings.clone(desc, a), -1, .Xbps, n in manual, false, false, ""})
 		}
 	}
 	// Flatpak apps (sizes come human-readable: "1.2 GB")
 	for f in tool_lines({"flatpak", "list", "--app", "--columns=application,version,size,installation,name"}) do if len(f) >= 5 {
-		append(out, Package{strings.clone(f[0], a), strings.clone(f[1], a), strings.clone(f[4], a), parse_human_size(f[2]), .Flatpak, true, f[3] == "system", false})
+		append(out, Package{strings.clone(f[0], a), strings.clone(f[1], a), strings.clone(f[4], a), parse_human_size(f[2]), .Flatpak, true, f[3] == "system", false, ""})
 	}
 }
 
@@ -266,6 +267,13 @@ scan_worker :: proc() {
 	scan_tools(&list, a)
 	free_all(context.temp_allocator)
 	for &p in list do if p.manager != .Flatpak && is_protected(p.name) do p.protected = true
+	// icons: the launcher a package installs usually has its name (or its program's)
+	idx, dirs := desktop_icon_index()
+	for &p in list {
+		key := strings.to_lower(p.name, context.temp_allocator) // the index keys are lower-case
+		if icon, ok := idx[key]; ok do p.icon = find_icon(icon, dirs[:], a)
+	}
+	free_all(context.temp_allocator)
 	slice.sort_by(list[:], proc(x, y: Package) -> bool {return x.size > y.size if x.size != y.size else x.name < y.name})
 	sync.mutex_lock(&pk.lock)
 	delete(pk.list)
@@ -349,21 +357,29 @@ uninstall_ok :: proc() {
 	app.dialog = .None
 	argv, ok := uninstall_argv(pending)
 	if !ok do return
-	exe, err := os.get_executable_path(context.temp_allocator)
-	if err != nil do return
-	inner := make([dynamic]string, context.temp_allocator)
-	append(&inner, exe, "--hold") // prints the command, runs it, waits for Enter
-	append(&inner, ..argv[:])
-	term := find_terminal()
-	if term == "" {
-		toastf("端末が見つかりません")
-		return
-	}
-	if pid := spawn(terminal_argv(term, inner[:])[:]); pid != 0 {
-		append(&jobs, Job{pid = pid, kind = .Uninstall, label = strings.clone(pending.name)})
+	if run_in_terminal(argv[:], pending.name, .Uninstall) {
 		delete(pk.removing)
 		pk.removing = strings.clone(pending.name)
 	}
+}
+
+// Runs a command in a terminal that shows it, runs it and waits for Enter (`--hold`);
+// when the terminal closes, a job of `kind` finishes (to refresh what it changed).
+run_in_terminal :: proc(argv: []string, label: string, kind: Job_Kind) -> bool {
+	exe, err := os.get_executable_path(context.temp_allocator)
+	if err != nil do return false
+	inner := make([dynamic]string, context.temp_allocator)
+	append(&inner, exe, "--hold") // prints the command, runs it, waits for Enter
+	append(&inner, ..argv)
+	term := find_terminal()
+	if term == "" {
+		toastf("端末が見つかりません")
+		return false
+	}
+	pid := spawn(terminal_argv(term, inner[:])[:])
+	if pid == 0 do return false
+	append(&jobs, Job{pid = pid, kind = kind, label = strings.clone(label)})
+	return true
 }
 
 // The first terminal emulator that is installed ($TERMINAL first).

@@ -4,6 +4,7 @@ package main
 // item's MIME type — inode/directory for folders — shown in the radial menu with their
 // own icons (scalable SVG from the icon theme, drawn by svg.odin).
 
+import "core:image/png"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
@@ -25,21 +26,63 @@ app_dirs :: proc() -> [dynamic]string {
 	data_dirs := os.get_env("XDG_DATA_DIRS", context.temp_allocator)
 	if data_dirs == "" do data_dirs = "/usr/local/share:/usr/share" // FreeBSD ports live in /usr/local
 	for d in strings.split(data_dirs, ":", context.temp_allocator) do if d != "" do append(&dirs, d)
+	// Flatpak apps' launchers and icons (not every session adds these to XDG_DATA_DIRS)
+	fp_user, _ := filepath.join({data_home, "flatpak/exports/share"}, context.temp_allocator)
+	append(&dirs, fp_user, "/var/lib/flatpak/exports/share")
 	return dirs
 }
 
 // The scalable SVG for an Icon= value (an absolute path, or a name in the hicolor theme).
-@(private = "file")
-find_icon :: proc(icon: string, data_dirs: []string) -> string {
+// An SVG if there is one (sharp at any size), else the PNG closest to menu / list size.
+find_icon :: proc(icon: string, data_dirs: []string, allocator := context.allocator) -> string {
 	if icon == "" do return ""
-	if filepath.is_abs(icon) do return strings.clone(icon) if strings.has_suffix(icon, ".svg") && os.exists(icon) else ""
-	for d in data_dirs {
-		for sub in ([]string{"icons/hicolor/scalable/apps", "pixmaps"}) {
-			p, _ := filepath.join({d, sub, strings.concatenate({icon, ".svg"}, context.temp_allocator)}, context.temp_allocator)
-			if os.exists(p) do return strings.clone(p)
+	if filepath.is_abs(icon) do return strings.clone(icon, allocator) if (strings.has_suffix(icon, ".svg") || strings.has_suffix(icon, ".png")) && os.exists(icon) else ""
+	Try :: struct {sub, ext: string}
+	tries := []Try {
+		{"icons/hicolor/scalable/apps", ".svg"}, {"pixmaps", ".svg"},
+		{"icons/hicolor/64x64/apps", ".png"}, {"icons/hicolor/48x48/apps", ".png"}, {"icons/hicolor/128x128/apps", ".png"},
+		{"icons/hicolor/96x96/apps", ".png"}, {"icons/hicolor/256x256/apps", ".png"}, {"icons/hicolor/512x512/apps", ".png"},
+		{"icons/hicolor/32x32/apps", ".png"},
+		{"pixmaps", ".png"},
+	}
+	for t in tries {
+		for d in data_dirs {
+			p, _ := filepath.join({d, t.sub, strings.concatenate({icon, t.ext}, context.temp_allocator)}, context.temp_allocator)
+			if os.exists(p) do return strings.clone(p, allocator)
 		}
 	}
 	return ""
+}
+
+// Launchers by the names a package may go by: the desktop id ("firefox", "org.gimp.GIMP"),
+// its last part ("gimp"), and the program it runs. Value: the Icon= entry.
+desktop_icon_index :: proc() -> (idx: map[string]string, dirs: [dynamic]string) {
+	idx = make(map[string]string, 256, context.temp_allocator)
+	dirs = app_dirs()
+	for d in dirs {
+		apps_dir, _ := filepath.join({d, "applications"}, context.temp_allocator)
+		infos, err := os.read_all_directory_by_path(apps_dir, context.temp_allocator)
+		if err != nil do continue
+		for fi in infos {
+			if !strings.has_suffix(fi.name, ".desktop") do continue
+			data, rerr := os.read_entire_file_from_path(fi.fullpath, context.temp_allocator)
+			if rerr != nil do continue
+			icon, exec := "", ""
+			t := string(data)
+			for line in strings.split_lines_iterator(&t) {
+				if strings.has_prefix(line, "Icon=") && icon == "" do icon = strings.trim_space(line[5:])
+				if strings.has_prefix(line, "Exec=") && exec == "" do exec = strings.trim_space(line[5:])
+			}
+			if icon == "" do continue
+			id := strings.to_lower(strings.trim_suffix(fi.name, ".desktop"), context.temp_allocator)
+			keys := [3]string{id, id[strings.last_index_byte(id, '.') + 1:], ""}
+			if f := strings.fields(exec, context.temp_allocator); len(f) > 0 && f[0] != "flatpak" && f[0] != "env" {
+				keys[2] = strings.to_lower(filepath.base(f[0]), context.temp_allocator)
+			}
+			for k in keys do if k != "" && k not_in idx do idx[k] = icon
+		}
+	}
+	return
 }
 
 @(private = "file")
@@ -182,12 +225,13 @@ draw_app_icon :: proc(path: string, cx, cy, size: f32) -> bool {
 	key := strings.concatenate({path, "@", itoa_tmp(s)}, context.temp_allocator)
 	img, ok := app_icons[key]
 	if !ok {
-		if fi, serr := os.stat(path, context.temp_allocator); serr != nil || fi.size > 1 << 20 do return false // an icon, not a 2 GB "svg"
+		if fi, serr := os.stat(path, context.temp_allocator); serr != nil || fi.size > 2 << 20 do return false // an icon, not a 2 GB file
 		data, err := os.read_entire_file_from_path(path, context.temp_allocator)
 		if err != nil do return false
-		img = svg_rasterize(string(data), s)
-		app_icons[strings.clone(key)] = img
+		img = png_icon(data, s) if strings.has_suffix(path, ".png") else svg_rasterize(string(data), s)
+		app_icons[strings.clone(key)] = img // nil (unreadable) is cached too: no retry each frame
 	}
+	if img == nil do return false
 	blit_scaled({cx - f32(s) / 2, cy - f32(s) / 2, f32(s), f32(s)}, img, s, s)
 	return true
 }
@@ -249,4 +293,20 @@ file_mime :: proc(name: string) -> string {
 lang_icon_known :: proc(name: string) -> bool {
 	_, ok := lang_of(name)
 	return ok
+}
+
+// A PNG icon decoded (pure Odin, core:image/png) and scaled to s×s premultiplied ARGB.
+png_icon :: proc(data: []u8, s: int) -> []u32 {
+	img, err := png.load_from_bytes(data, {.alpha_add_if_missing}, context.temp_allocator)
+	if err != nil || img == nil || img.channels != 4 || img.width <= 0 || img.height <= 0 || img.width > 1024 || img.height > 1024 do return nil
+	px := img.pixels.buf[:]
+	c := 2 if img.depth == 16 else 1 // bytes per channel; 16-bit is big-endian, so the first byte is the high one
+	if len(px) < img.width * img.height * 4 * c do return nil
+	src := make([]u32, img.width * img.height, context.temp_allocator)
+	for i in 0 ..< len(src) {
+		o := i * 4 * c
+		r, g, b, a := u32(px[o]), u32(px[o + c]), u32(px[o + 2 * c]), u32(px[o + 3 * c])
+		src[i] = a << 24 | (r * a / 255) << 16 | (g * a / 255) << 8 | b * a / 255
+	}
+	return scale_image(src, img.width, img.height, s, s)
 }

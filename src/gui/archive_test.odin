@@ -658,3 +658,57 @@ test_sunburst_scan :: proc(t: ^testing.T) {
 	// "small" (4 bytes of 105,004) is below 0.25 % — still counted in the total, just no node of its own children
 	testing.expect_value(t, top[2].size, i64(4))
 }
+
+@(test)
+test_cleanup :: proc(t: ^testing.T) {
+	home := "/tmp/ame-fm-test-home"
+	outside := "/tmp/ame-fm-test-outside"
+	_ = os.remove_all(home)
+	_ = os.remove_all(outside)
+	defer {_ = os.remove_all(home); _ = os.remove_all(outside)}
+	_ = os.make_directory_all("/tmp/ame-fm-test-home/.cache/mozilla/cache2")
+	_ = os.make_directory_all("/tmp/ame-fm-test-home/.cache/ame-shell/toolchain")
+	_ = os.make_directory_all("/tmp/ame-fm-test-home/.cache/someapp")
+	_ = os.make_directory_all("/tmp/ame-fm-test-home/.npm/_cacache")
+	_ = os.make_directory_all(outside)
+	_ = os.write_entire_file_from_string("/tmp/ame-fm-test-home/.cache/mozilla/cache2/a", strings.repeat("x", 5000, context.temp_allocator))
+	_ = os.write_entire_file_from_string("/tmp/ame-fm-test-home/.cache/someapp/b", "yy")
+	_ = os.write_entire_file_from_string("/tmp/ame-fm-test-home/.npm/_cacache/c", strings.repeat("z", 9000, context.temp_allocator))
+	_ = os.write_entire_file_from_string("/tmp/ame-fm-test-outside/precious", "keep me")
+	_ = os.symlink(outside, "/tmp/ame-fm-test-home/.cache/someapp/link") // a cache with a link out of it
+	saved_home := app.home
+	defer app.home = saved_home
+	app.home = home
+	cleanup_open()
+	cleanup_wait()
+	items := make([dynamic]Clean_Item, context.temp_allocator)
+	for it in cleanup_items() do if strings.has_prefix(it.path, home) do append(&items, it) // this machine's system caches are listed too
+	for it in items do testing.expect(t, !strings.contains(it.path, "ame-shell")) // a toolchain, not a cache
+	testing.expect(t, len(items) >= 3)
+	if len(items) >= 3 {
+		testing.expect_value(t, items[0].label, "Firefox のキャッシュ") // safe tier first
+		testing.expect_value(t, items[0].size, i64(5000))
+		testing.expect_value(t, items[1].tier, 1) // then re-downloads, biggest first
+		testing.expect_value(t, items[1].label, "npm のダウンロード")
+	}
+	for it in items do if strings.contains(it.path, "someapp") do cleanup_delete_now(it)
+	testing.expect(t, os.exists("/tmp/ame-fm-test-home/.cache/someapp")) // the folder stays, emptied
+	testing.expect(t, !os.exists("/tmp/ame-fm-test-home/.cache/someapp/b"))
+	testing.expect(t, os.exists("/tmp/ame-fm-test-outside/precious")) // the link went, not what it points to
+	cleanup_close()
+}
+
+@(test)
+test_svg_stroke :: proc(t: ^testing.T) {
+	// a ring drawn as a stroked circle: area ≈ π((r+w/2)² − (r−w/2)²)
+	img := svg_rasterize(`<svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="30" fill="none" stroke="#fff" stroke-width="10"/></svg>`, 100, context.temp_allocator)
+	area: f32
+	for p in img do area += f32(p >> 24) / 255
+	want := f32(math.PI) * (35 * 35 - 25 * 25)
+	testing.expectf(t, abs(area - want) < want * 0.05, "ring area %v, want %v", area, want)
+	testing.expect_value(t, img[50 * 100 + 50] >> 24, u32(0)) // the middle stays empty
+	// an open path is not closed by its stroke
+	img = svg_rasterize(`<svg viewBox="0 0 100 100"><path d="M10 10 L90 10 L90 90" fill="none" stroke="#fff" stroke-width="4"/></svg>`, 100, context.temp_allocator)
+	testing.expect_value(t, img[50 * 100 + 50] >> 24, u32(0)) // no diagonal back to the start
+	testing.expect(t, img[10 * 100 + 50] >> 24 > 200)
+}

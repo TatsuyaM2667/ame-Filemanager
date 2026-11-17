@@ -36,11 +36,13 @@ storage_open :: proc() {
 	st.scroll = 0
 	st.disks_at = 0
 	sunburst_set_root(app.home)
+	cleanup_open()
 	packages_rescan()
 }
 
 storage_close :: proc() {
 	sunburst_close()
+	cleanup_close()
 }
 
 // ---------------------------------------------------------------------------
@@ -126,6 +128,44 @@ draw_storage :: proc(b: Rect) {
 	y = section(x, y, "容量マップ", "クリックで中へ・中心で上へ・右の一覧で開く")
 	y += draw_sunburst({x, y, w, 0}) + px(16)
 
+	// --- what can go, recommended first (cleanup.odin)
+	y = section(x, y, "消しても大丈夫なもの", "おすすめ順（自動で作り直されるもの → 再ダウンロードになるもの、大きい順）")
+	busy := cleanup_busy()
+	shown_n, hidden_n := 0, 0
+	for it in cleanup_items() {
+		// worth a row: 1 MB or more (or still being measured / a command with no size)
+		if it.size >= 0 && it.size < 1 << 20 && it.kind != .Trash do continue
+		if it.kind == .Trash && it.size <= 4096 do continue // empty trash: nothing to gain
+		if shown_n >= 15 {hidden_n += 1; continue}
+		shown_n += 1
+		row := Rect{x, y, w, px(46)}
+		if hovering(row) do rrect(row, px(8), HOVER)
+		rank := fmt.tprintf("%d", shown_n)
+		text(row.x + px(10) + (px(16) - f32(text_width(rank, fs(12), true))) / 2, baseline(row, fs(12)), rank, fs(12), DIM, true)
+		tl := "安全" if it.tier == 0 else "再ダウンロード"
+		tc := hex(0xa6e3a1) if it.tier == 0 else hex(0xf9e2af)
+		tag := Rect{row.x + px(36), row.y + px(7), f32(text_width(tl, fs(10), true)) + px(14), px(17)}
+		rrect(tag, px(8), with_alpha(tc, 50))
+		text(tag.x + px(7), baseline(tag, fs(10)), tl, fs(10), tc, true)
+		text(tag.x + tag.w + px(8), row.y + px(20), it.label, fs(14), FG, true)
+		text(row.x + px(36), row.y + px(38), ellipsize(it.detail, fs(11), w - px(300)), fs(11), DIM)
+		sz := "計算中…" if it.size < 0 && it.path != "" else ("—" if it.size < 0 else format_size(it.size))
+		text(row.x + w - px(150) - f32(text_width(sz, fs(13))), baseline(row, fs(13)), sz, fs(13), FG)
+		btn := Rect{row.x + w - px(130), row.y + (row.h - px(28)) / 2, px(120), px(28)}
+		switch {
+		case busy == it.label:
+			text(btn.x + px(12), baseline(btn, fs(12)), "削除しています…", fs(12), DIM)
+		case busy == "" && text_button(btn, "空にする" if it.kind == .Trash else ("片付ける" if it.kind == .Command else "削除"), 2):
+			begin_cleanup(it)
+		}
+		y += px(48)
+	}
+	if hidden_n > 0 {
+		text(x + px(36), y + px(16), fmt.tprintf("ほか %d 件（小さいもの）", hidden_n), fs(12), DIM)
+		y += px(28)
+	}
+	y += px(16)
+
 	// --- apps
 	sync.mutex_lock(&pk.lock)
 	defer sync.mutex_unlock(&pk.lock)
@@ -160,13 +200,19 @@ draw_storage :: proc(b: Rect) {
 		p := pk.list[i]
 		row := Rect{x, ry, w, rh - px(4)}
 		if hovering(row) do rrect(row, px(8), HOVER)
-		badge := Rect{row.x + px(8), row.y + px(8), px(48), px(18)}
-		rrect(badge, px(9), hex(0xffffff, 26))
+		// the app's own icon (launcher icon), or a package glyph for libraries and tools
+		ic := Rect{row.x + px(10), row.y + (row.h - px(36)) / 2, px(36), px(36)}
+		if !draw_app_icon(p.icon, ic.x + ic.w / 2, ic.y + ic.h / 2, px(32)) {
+			rrect(ic, px(9), hex(0xffffff, 16))
+			glyph_center(ic, 0xf1b2, fs(15), DIM) // cube
+		}
+		name_w := text(row.x + px(56), row.y + px(19), ellipsize(p.name, fs(14), w * 0.35, true), fs(14), FG, true)
+		ver_w := text(row.x + px(64) + name_w, row.y + px(19), ellipsize(p.version, fs(11), px(120)), fs(11), DIM)
 		mname := PKG_MANAGER_NAMES[p.manager]
-		text(badge.x + (badge.w - f32(text_width(mname, fs(10), true))) / 2, baseline(badge, fs(10)), mname, fs(10), DIM, true)
-		name_w := text(row.x + px(66), row.y + px(19), ellipsize(p.name, fs(14), w * 0.35, true), fs(14), FG, true)
-		text(row.x + px(74) + name_w, row.y + px(19), ellipsize(p.version, fs(11), px(120)), fs(11), DIM)
-		text(row.x + px(66), row.y + px(36), ellipsize(p.desc, fs(12), w - px(260)), fs(12), DIM)
+		badge := Rect{row.x + px(72) + name_w + ver_w, row.y + px(7), f32(text_width(mname, fs(9), true)) + px(12), px(16)}
+		rrect(badge, px(8), hex(0xffffff, 22))
+		text(badge.x + px(6), baseline(badge, fs(9)), mname, fs(9), DIM, true)
+		text(row.x + px(56), row.y + px(36), ellipsize(p.desc, fs(12), w - px(250)), fs(12), DIM)
 		sz := "—" if p.size < 0 else format_size(p.size)
 		text(row.x + w - px(150) - f32(text_width(sz, fs(13))), baseline(row, fs(13)), sz, fs(13), FG)
 		del := Rect{row.x + w - px(130), row.y + (row.h - px(28)) / 2, px(120), px(28)}
@@ -189,9 +235,12 @@ draw_storage :: proc(b: Rect) {
 storage_poll :: proc() -> bool {
 	if !is_storage_view() do return false
 	@(static) seen_scan: bool
+	@(static) seen_clean: int
+	@(static) seen_busy: string
 	scanning := sync.atomic_load(&pk.scanning)
-	changed := sunburst_poll() || scanning != seen_scan
-	seen_scan = scanning
+	gen, busy := cleanup_gen(), cleanup_busy()
+	changed := sunburst_poll() || scanning != seen_scan || gen != seen_clean || busy != seen_busy
+	seen_scan, seen_clean, seen_busy = scanning, gen, busy
 	return changed
 }
 

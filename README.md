@@ -64,8 +64,10 @@ so it idles at **0% CPU and about 20–35 MB of RAM** (most of it is the window'
   back / forward buttons.
 - **Storage** (sidebar → ストレージ): every disk's used / free space, a Filelight-style sunburst of
   the home folder (rings = levels, angle = size; hover for sizes, click to dive in, center to go
-  up; measured in the background), and the installed applications by
-  size — apk, pacman, apt, dnf / zypper, xbps, FreeBSD pkg and Flatpak. アンインストール removes one
+  up; measured in the background), **what can safely go**, ranked (trash, thumbnails, browser /
+  GPU / build caches and package-manager caches first, then download caches like npm, Cargo,
+  Gradle, pip; biggest first, each with a delete button), and the installed applications with
+  their icons, by size — apk, pacman, apt, dnf / zypper, xbps, FreeBSD pkg and Flatpak. アンインストール removes one
   completely (unneeded dependencies and settings too: `apk del`, `pacman -Rns`, `apt-get purge
   --autoremove`, `flatpak uninstall --delete-data`…) after a confirmation that shows the exact
   command; it runs in a terminal through doas / sudo / pkexec, where you enter the password.
