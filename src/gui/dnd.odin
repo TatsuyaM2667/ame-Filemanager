@@ -22,7 +22,7 @@ Drag_Item :: struct {
 	path:   string, // shared with dd.paths
 	is_dir: bool,
 	kind:   Kind,
-	tint:   u8,
+	tint:   u32,
 	mtime:  i64,
 }
 

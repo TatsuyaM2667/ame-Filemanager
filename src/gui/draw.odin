@@ -178,9 +178,9 @@ encode_rune :: proc(buf: []u8, r: rune) -> int {
 // ---------------------------------------------------------------------------
 // Adwaita-style file icons, drawn procedurally (no icon theme / SVG loader needed)
 
-// tint: 0 = Adwaita blue, 1..7 = TAG_COLORS (the folder itself takes the color)
-folder_icon :: proc(x, y, s: f32, emblem: rune = 0, tint: u8 = 0) {
-	base: u32 = 0x62a0ea if tint == 0 else TAG_COLORS[tint]
+// tint: 0 = Adwaita blue, else the tag's 0xRRGGBB (the folder itself takes the color)
+folder_icon :: proc(x, y, s: f32, emblem: rune = 0, tint: u32 = 0) {
+	base: u32 = 0x62a0ea if tint == 0 else tint
 	shade :: proc(c: u32, f: f32, a: u8 = 255) -> Color {
 		return {u8(f32((c >> 16) & 255) * f), u8(f32((c >> 8) & 255) * f), u8(f32(c & 255) * f), a}
 	}

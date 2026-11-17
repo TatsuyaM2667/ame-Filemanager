@@ -55,7 +55,8 @@ so it idles at **0% CPU and about 20–35 MB of RAM** (most of it is the window'
   see `assets/icons/SOURCES.md`) are compiled in and drawn by a small SVG rasterizer written in Odin.
 - **Standard folders first**: Desktop, Documents, Downloads, Music, Pictures and Videos stay at the
   top in any sort order, in the sidebar's order.
-- **Tags like iPad**: create named tags with colors; a tagged folder takes the tag's color.
+- **Tags like iPad**: create named tags in any color (24 swatches, or a hue / saturation picker);
+  a tagged folder takes the tag's color.
 - **Tree view** (Ctrl+3), Obsidian-style, as an alternative to icons and list.
 - **Copy Path** (right-click, or Shift+Ctrl+C) and copy / paste of text in the path bar.
 - **Handy extras from other file managers**: new empty file, select by pattern (Ctrl+S, e.g.

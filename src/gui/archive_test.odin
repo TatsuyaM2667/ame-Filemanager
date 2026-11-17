@@ -58,8 +58,8 @@ tags_follow_renames :: proc(t: ^testing.T) {
 	testing.expect_value(t, file_tags["/b/new/x.txt"], u64(1 << 3))
 	testing.expect_value(t, file_tags["/a/dirx"], u64(1 << 4))
 	testing.expect(t, "/a/dir" not_in file_tags)
-	append(&tag_list, Tag{2, 0, "無色"}, Tag{3, 5, "青"})
-	testing.expect_value(t, tint_of_mask(1 << 2 | 1 << 3), u8(5)) // first *colored* tag wins
+	append(&tag_list, Tag{2, 0, "無色"}, Tag{3, 0x89b4fa, "青"})
+	testing.expect_value(t, tint_of_mask(1 << 2 | 1 << 3), u32(0x89b4fa)) // first *colored* tag wins
 }
 
 @(private = "file")
@@ -711,4 +711,16 @@ test_svg_stroke :: proc(t: ^testing.T) {
 	img = svg_rasterize(`<svg viewBox="0 0 100 100"><path d="M10 10 L90 10 L90 90" fill="none" stroke="#fff" stroke-width="4"/></svg>`, 100, context.temp_allocator)
 	testing.expect_value(t, img[50 * 100 + 50] >> 24, u32(0)) // no diagonal back to the start
 	testing.expect(t, img[10 * 100 + 50] >> 24 > 200)
+}
+
+@(test)
+test_tag_colors :: proc(t: ^testing.T) {
+	testing.expect_value(t, parse_tag_color("#1e66f5"), u32(0x1e66f5)) // now
+	testing.expect_value(t, parse_tag_color("5"), u32(0x89b4fa)) // an older tags.conf (index)
+	testing.expect_value(t, parse_tag_color("0"), u32(0))
+	testing.expect_value(t, hsv_to_rgb(0, 1, 1), u32(0xff0000))
+	testing.expect_value(t, hsv_to_rgb(1.0 / 3, 1, 1), u32(0x00ff00))
+	testing.expect_value(t, hsv_to_rgb(0, 0, 0), u32(0x010101)) // never 0: that means "no color"
+	h, s, v := rgb_to_hsv(0x1e66f5)
+	testing.expect_value(t, hsv_to_rgb(h, s, v), u32(0x1e66f5)) // round trip
 }

@@ -7,19 +7,28 @@ package main
 //   tag\t<id>\t<color>\t<name>      file\t<hex bitmask of tag ids>\t<absolute path>
 
 import "core:fmt"
+import "core:math"
 import "core:mem/virtual"
 import "core:os"
 import "core:path/filepath"
 import "core:strconv"
 import "core:strings"
 
+// Tag colors are RGB (0 = no color). The first 8 are the original ones: old tags.conf files
+// stored an index into them, and the radial menu's color arc offers them.
 TAG_COLORS := [8]u32{0, 0xf38ba8, 0xfab387, 0xf9e2af, 0xa6e3a1, 0x89b4fa, 0xcba6f7, 0x9399b2}
 TAG_NAMES := [8]string{"色なし", "赤", "オレンジ", "黄", "緑", "青", "紫", "グレー"}
+// The edit dialog's swatches: bright, deep, calm; plus any color from the picker.
+TAG_PALETTE := [24]u32 {
+	0xf38ba8, 0xfab387, 0xf9e2af, 0xa6e3a1, 0x94e2d5, 0x89dceb, 0x89b4fa, 0xcba6f7,
+	0xe64553, 0xfe640b, 0xdf8e1d, 0x40a02b, 0x179299, 0x04a5e5, 0x1e66f5, 0x8839ef,
+	0xf5c2e7, 0xf2cdcd, 0xb4befe, 0xc8a27c, 0x8b5e3c, 0xa6adc8, 0x9399b2, 0x585b70,
+}
 I_TAG :: 0xf02b
 
 Tag :: struct {
 	id:    u8, // bit in file masks (shortcut: at most 64 tags)
-	color: u8,
+	color: u32, // 0xRRGGBB, 0 = no color
 	name:  string,
 }
 
@@ -61,8 +70,7 @@ load_tags :: proc() {
 			f := strings.split_n(line, "\t", 4, context.temp_allocator)
 			if len(f) == 4 && f[0] == "tag" {
 				id, _ := strconv.parse_uint(f[1])
-				c, _ := strconv.parse_uint(f[2])
-				if id < 64 && c < 8 do append(&tag_list, Tag{u8(id), u8(c), strings.clone(f[3])})
+				if id < 64 do append(&tag_list, Tag{u8(id), parse_tag_color(f[2]), strings.clone(f[3])})
 			} else if len(f) >= 3 && f[0] == "file" {
 				_, _, rest := strings.partition(line[5:], "\t")
 				mask, _ := strconv.parse_u64_of_base(f[1], 16)
@@ -72,7 +80,7 @@ load_tags :: proc() {
 		return
 	}
 	// first run: the seven color tags iPad starts with, plus the old color-only tags
-	for c in u8(1) ..= 7 do append(&tag_list, Tag{c, c, strings.clone(TAG_NAMES[c])})
+	for c in u8(1) ..= 7 do append(&tag_list, Tag{c, TAG_COLORS[c], strings.clone(TAG_NAMES[c])})
 	old, _ := filepath.join({app_config_dir(), "tags"}, context.temp_allocator)
 	if odata, oerr := os.read_entire_file_from_path(old, context.temp_allocator); oerr == nil {
 		text := string(odata)
@@ -87,7 +95,7 @@ load_tags :: proc() {
 
 save_tags :: proc() {
 	b := strings.builder_make(context.temp_allocator)
-	for t in tag_list do fmt.sbprintf(&b, "tag\t%d\t%d\t%s\n", t.id, t.color, t.name)
+	for t in tag_list do fmt.sbprintf(&b, "tag\t%d\t#%06x\t%s\n", t.id, t.color & 0xffffff, t.name)
 	for path, mask in file_tags {
 		if strings.contains_rune(path, '\n') do continue // one line per file: such a name would break the format
 		fmt.sbprintf(&b, "file\t%x\t%s\n", mask, path)
@@ -106,15 +114,25 @@ mask_of :: proc(name: string) -> u64 {
 }
 
 // Color a folder takes: its first colored tag, in sidebar order.
-tint_of :: proc(name: string) -> u8 {return tint_of_mask(mask_of(name))}
+tint_of :: proc(name: string) -> u32 {return tint_of_mask(mask_of(name))}
 
-tint_of_mask :: proc(m: u64) -> u8 {
+// "#rrggbb" (now) or an index into TAG_COLORS (older tags.conf).
+parse_tag_color :: proc(s: string) -> u32 {
+	if strings.has_prefix(s, "#") {
+		v, ok := strconv.parse_uint(s[1:], 16)
+		return u32(v) & 0xffffff if ok else 0
+	}
+	i, _ := strconv.parse_uint(s)
+	return TAG_COLORS[i] if i < len(TAG_COLORS) else 0
+}
+
+tint_of_mask :: proc(m: u64) -> u32 {
 	if m == 0 do return 0
 	for t in tag_list do if m & (1 << t.id) != 0 && t.color != 0 do return t.color
 	return 0
 }
 
-create_tag :: proc(name: string, color: u8) -> u8 {
+create_tag :: proc(name: string, color: u32) -> u8 {
 	used: u64
 	for t in tag_list do used |= 1 << t.id
 	id: u8 = 1
@@ -231,7 +249,7 @@ load_tag_view :: proc(path: string) -> bool {
 // The little color arc under the radial menu
 
 Arc_Item :: struct {
-	color: u8,
+	color: u32,
 	label: string,
 	on:    bool,
 }
@@ -242,7 +260,7 @@ arc_items :: proc() -> [dynamic]Arc_Item {
 	out := make([dynamic]Arc_Item, context.temp_allocator)
 	if menu_tag_id >= 0 {
 		t := tag_by_id(u8(menu_tag_id))
-		for c in u8(0) ..< 8 do append(&out, Arc_Item{c, TAG_NAMES[c], t != nil && t.color == c})
+		for c in 0 ..< 8 do append(&out, Arc_Item{TAG_COLORS[c], TAG_NAMES[c], t != nil && t.color == TAG_COLORS[c]})
 		return out
 	}
 	sel := selection()
@@ -258,7 +276,7 @@ arc_items :: proc() -> [dynamic]Arc_Item {
 arc_click :: proc(i: int) {
 	if menu_tag_id >= 0 {
 		if t := tag_by_id(u8(menu_tag_id)); t != nil {
-			t.color = u8(i)
+			if i >= 0 && i < len(TAG_COLORS) do t.color = TAG_COLORS[i]
 			save_tags()
 		}
 		return
@@ -266,12 +284,12 @@ arc_click :: proc(i: int) {
 	if i < len(tag_list) do toggle_tag(tag_list[i].id)
 }
 
-tag_dot :: proc(x, y, r: f32, c: u8, on := false) {
+tag_dot :: proc(x, y, r: f32, c: u32, on := false) {
 	rrect({x - r, y - r, 2 * r, 2 * r}, r, hex(0x10141f, 230))
 	if c == 0 {
 		rrect({x - r + px(1.5), y - r + px(1.5), 2 * r - px(3), 2 * r - px(3)}, r, DIM, px(1.5))
 	} else {
-		rrect({x - r + px(1.5), y - r + px(1.5), 2 * r - px(3), 2 * r - px(3)}, r, hex(TAG_COLORS[c]))
+		rrect({x - r + px(1.5), y - r + px(1.5), 2 * r - px(3), 2 * r - px(3)}, r, hex(c))
 	}
 	if on do rrect({x - r - px(3), y - r - px(3), 2 * r + px(6), 2 * r + px(6)}, r + px(3), FG, px(1.5))
 }
@@ -311,7 +329,7 @@ draw_sidebar_tags :: proc(y: ^f32, w: f32) {
 // Dialogs: tag picker (iPad's tag sheet) and new / edit tag
 
 tag_edit_id := -1 // -1 = creating a new tag
-tag_edit_color: u8
+tag_edit_color: u32
 tag_new_for_selection: bool // a tag created from the picker is applied right away
 
 tag_begin_edit :: proc(id: int) {
@@ -349,17 +367,120 @@ tag_edit_ok :: proc() {
 	app.edit_focus = .None
 }
 
-@(private = "file")
-color_row :: proc(x, y: f32, cur: u8) -> (picked: int) {
-	picked = -1
-	for c in 0 ..< 8 {
-		cx := x + f32(c) * px(34) + px(14)
-		hit := Rect{cx - px(14), y - px(14), px(28), px(28)}
-		if hovering(hit) do rrect(hit, px(14), HOVER)
-		tag_dot(cx, y, px(10), u8(c), u8(c) == cur)
-		if clicked(hit) do picked = c
+// ---------------------------------------------------------------------------
+// Color choice: "no color", 24 swatches, and a picker (saturation/brightness square + hue bar)
+
+@(private = "file") pick: struct {
+	open:    bool,
+	h, s, v: f32, // the picker's position (kept while dragging, even through grays)
+	drag:    int, // 0 none, 1 square, 2 hue bar
+}
+
+hsv_to_rgb :: proc(h, s, v: f32) -> u32 {
+	h6 := math.mod(h, 1) * 6
+	c := v * s
+	x := c * (1 - abs(math.mod(h6, 2) - 1))
+	r, g, b: f32
+	switch int(h6) {
+	case 0: r, g, b = c, x, 0
+	case 1: r, g, b = x, c, 0
+	case 2: r, g, b = 0, c, x
+	case 3: r, g, b = 0, x, c
+	case 4: r, g, b = x, 0, c
+	case:   r, g, b = c, 0, x
 	}
-	return
+	m := v - c
+	to8 :: proc(f: f32) -> u32 {return u32(clamp(f, 0, 1) * 255 + 0.5)}
+	rgb := to8(r + m) << 16 | to8(g + m) << 8 | to8(b + m)
+	return rgb if rgb != 0 else 0x010101 // 0 means "no color"
+}
+
+rgb_to_hsv :: proc(c: u32) -> (h, s, v: f32) {
+	r, g, b := f32(c >> 16 & 255) / 255, f32(c >> 8 & 255) / 255, f32(c & 255) / 255
+	mx, mn := max(r, g, b), min(r, g, b)
+	v = mx
+	d := mx - mn
+	if mx > 0 do s = d / mx
+	if d == 0 do return 0, s, v
+	switch mx {
+	case r: h = (g - b) / d + (6 if g < b else 0)
+	case g: h = (b - r) / d + 2
+	case:   h = (r - g) / d + 4
+	}
+	return h / 6, s, v
+}
+
+// Draws the choices at (x, y), width w; changes cur. Returns the height used.
+@(private = "file")
+color_choice :: proc(x, y, w: f32, cur: ^u32) -> f32 {
+	step := min(px(34), w / 8)
+	dot := min(px(11), step * 0.33)
+	swatch :: proc(cx, cy, r: f32, c: u32, on: bool) -> bool {
+		hit := Rect{cx - r - px(4), cy - r - px(4), 2 * r + px(8), 2 * r + px(8)}
+		if hovering(hit) do rrect(hit, hit.w / 2, HOVER)
+		tag_dot(cx, cy, r, c, on)
+		return clicked(hit)
+	}
+	// row 0: no color · custom (rainbow) · the current color and its hex
+	cy := y + step / 2
+	if swatch(x + step / 2, cy, dot, 0, cur^ == 0) do cur^ = 0
+	rx := x + step * 1.5
+	for k in 0 ..< 12 do ring_seg(rx, cy, dot * 0.45, dot + px(1), f32(k) * math.TAU / 12, f32(k + 1) * math.TAU / 12 + 0.02, hex(hsv_to_rgb(f32(k) / 12, 0.75, 0.95)))
+	if pick.open do rrect({rx - dot - px(3), cy - dot - px(3), 2 * dot + px(6), 2 * dot + px(6)}, dot + px(3), FG, px(1.5))
+	if clicked({rx - dot - px(4), cy - dot - px(4), 2 * dot + px(8), 2 * dot + px(8)}) {
+		pick.open = !pick.open
+		if cur^ != 0 do pick.h, pick.s, pick.v = rgb_to_hsv(cur^)
+		else do pick.h, pick.s, pick.v = 0.6, 0.6, 0.9
+	}
+	text(x + step * 2.3, cy + px(5), "カスタム" if !pick.open else "カスタム（下で選ぶ）", fs(12), DIM)
+	if cur^ != 0 {
+		label := fmt.tprintf("#%06x", cur^)
+		lw := f32(text_width(label, fs(12)))
+		text(x + w - lw, cy + px(5), label, fs(12), FG)
+		rrect({x + w - lw - px(30), cy - px(9), px(20), px(18)}, px(5), hex(cur^))
+	}
+	y := y + step
+	// 3 × 8 swatches
+	for c, i in TAG_PALETTE {
+		sx := x + step / 2 + f32(i % 8) * step
+		sy := y + step / 2 + f32(i / 8) * step
+		if swatch(sx, sy, dot, c, cur^ == c) {
+			cur^ = c
+			pick.h, pick.s, pick.v = rgb_to_hsv(c)
+		}
+	}
+	y += step * 3
+	if !pick.open do return y - (cy - step / 2)
+	// picker: saturation (x) × brightness (y) square for the hue, then the hue bar
+	sq := Rect{x, y + px(8), w, px(110)}
+	hb := Rect{x, sq.y + sq.h + px(10), w, px(14)}
+	cell := max(px(2), 1)
+	for yy := f32(0); yy < sq.h; yy += cell {
+		for xx := f32(0); xx < sq.w; xx += cell {
+			fill({sq.x + xx, sq.y + yy, cell, cell}, hex(hsv_to_rgb(pick.h, xx / sq.w, 1 - yy / sq.h)))
+		}
+	}
+	for xx := f32(0); xx < hb.w; xx += cell do fill({hb.x + xx, hb.y, cell, hb.h}, hex(hsv_to_rgb(xx / hb.w, 1, 1)))
+	rrect(sq, px(6), LINE, px(1))
+	// markers
+	mx, my := sq.x + pick.s * sq.w, sq.y + (1 - pick.v) * sq.h
+	rrect({mx - px(6), my - px(6), px(12), px(12)}, px(6), hex(0xffffff), px(2))
+	hx := hb.x + pick.h * hb.w
+	rrect({hx - px(3), hb.y - px(3), px(6), hb.h + px(6)}, px(3), hex(0xffffff), px(2))
+	// dragging
+	if app.pressed && contains(sq, app.mx, app.my) do pick.drag = 1
+	if app.pressed && contains({hb.x, hb.y - px(4), hb.w, hb.h + px(8)}, app.mx, app.my) do pick.drag = 2
+	if !app.held do pick.drag = 0
+	switch pick.drag {
+	case 1:
+		pick.s = clamp((app.mx - sq.x) / sq.w, 0, 1)
+		pick.v = clamp(1 - (app.my - sq.y) / sq.h, 0, 1)
+		cur^ = hsv_to_rgb(pick.h, pick.s, pick.v)
+	case 2:
+		pick.h = clamp((app.mx - hb.x) / hb.w, 0, 0.999)
+		cur^ = hsv_to_rgb(pick.h, pick.s, pick.v)
+	}
+	return hb.y + hb.h - (cy - step / 2)
 }
 
 draw_tag_edit :: proc(W, H: f32) {
@@ -368,7 +489,7 @@ draw_tag_edit :: proc(W, H: f32) {
 	draw_alpha = u32(p * 255)
 	defer draw_alpha = 255
 	w := min(px(400), W - px(32))
-	h := px(230)
+	h := px(230) + min(px(34), (w - px(48)) / 8) * 3 + (px(150) if pick.open else 0) // swatches (+ the picker)
 	r := Rect{(W - w) / 2, (H - h) / 2 + (1 - p) * px(24), w, h}
 	rrect(r, px(14), POP_BG)
 	rrect(r, px(14), LINE, px(1))
@@ -377,7 +498,7 @@ draw_tag_edit :: proc(W, H: f32) {
 	text(r.x + (r.w - tw) / 2, r.y + px(40), title, fs(16), FG, true)
 	er := Rect{r.x + px(24), r.y + px(60), r.w - px(48), px(36)}
 	draw_edit(&app.dlg_edit, er, true)
-	if c := color_row(er.x, er.y + er.h + px(30), tag_edit_color); c >= 0 do tag_edit_color = u8(c)
+	color_choice(er.x, er.y + er.h + px(16), er.w, &tag_edit_color)
 	bw := (r.w - px(24 * 2 + 12)) / 2
 	by := r.y + r.h - px(24 + 36)
 	ok := strings.trim_space(edit_str(&app.dlg_edit)) != ""
